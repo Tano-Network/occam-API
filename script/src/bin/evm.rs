@@ -28,6 +28,14 @@ pub const FIBONACCI_ELF: &[u8] = include_elf!("fibonacci-program");
 struct EVMArgs {
     #[arg(long, default_value = "20")]
     n: u32,
+    #[arg(long, default_value = "20")]
+    collateral_amount: u32,
+    #[arg(long, default_value = "20")]
+    debt_amount: u32,
+    
+
+    
+
     #[arg(long, value_enum, default_value = "groth16")]
     system: ProofSystem,
 }
@@ -46,6 +54,8 @@ struct SP1FibonacciProofFixture {
     a: u32,
     b: u32,
     n: u32,
+    icr: u32,
+    collateral_amount: u32,
     vkey: String,
     public_values: String,
     proof: String,
@@ -67,8 +77,12 @@ fn main() {
     // Setup the inputs.
     let mut stdin = SP1Stdin::new();
     stdin.write(&args.n);
+    stdin.write(&args.collateral_amount);
+    stdin.write(&args.debt_amount);
 
     println!("n: {}", args.n);
+    println!("collateral_amount: {}", args.collateral_amount);
+    println!("debt_amount: {}", args.debt_amount);
     println!("Proof System: {:?}", args.system);
 
     // Generate the proof based on the selected proof system.
@@ -89,13 +103,15 @@ fn create_proof_fixture(
 ) {
     // Deserialize the public values.
     let bytes = proof.public_values.as_slice();
-    let PublicValuesStruct { n, a, b } = PublicValuesStruct::abi_decode(bytes).unwrap();
+    let PublicValuesStruct { n, a, b , icr, collateral_amount} = PublicValuesStruct::abi_decode(bytes).unwrap();
 
     // Create the testing fixture so we can test things end-to-end.
     let fixture = SP1FibonacciProofFixture {
         a,
         b,
         n,
+        icr,
+        collateral_amount,
         vkey: vk.bytes32().to_string(),
         public_values: format!("0x{}", hex::encode(bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),

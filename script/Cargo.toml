@@ -27,5 +27,9 @@ alloy-sol-types = { workspace = true }
 fibonacci-lib = { path = "../lib" }
 dotenv = "0.15.0"
 
+# New dependencies
+reqwest = { version = "0.11", features = ["json", "blocking"] }
+tokio = { version = "1", features = ["full"] }
+
 [build-dependencies]
 sp1-build = "4.2.0"
