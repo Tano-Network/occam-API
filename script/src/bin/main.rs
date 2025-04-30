@@ -36,6 +36,10 @@ struct Args {
     collateral_amount: u32,
     #[arg(long, default_value = "10")]
     debt_amount: u32,
+    #[arg(long, default_value = "50000")]
+    usbd_loan: u32,
+    #[arg(long, default_value = "5")]
+    btc_balance: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,10 +85,16 @@ async fn main() {
     stdin.write(&args.collateral_amount);
     stdin.write(&args.debt_amount);
     stdin.write(&btc_price_usd); // <-- New input
+    stdin.write(&args.usbd_loan);
+    stdin.write(&args.btc_balance);
+
 
     println!("n: {}", args.n);
     println!("collateral_amount: {}", args.collateral_amount);
     println!("debt_amount: {}", args.debt_amount);
+    println!("usbd_loan: {}", args.usbd_loan);
+    println!("btc_balance: {}", args.btc_balance);
+
 
     if args.execute {
         // Execute the program
@@ -93,12 +103,14 @@ async fn main() {
 
         // Read the output.
         let decoded = PublicValuesStruct::abi_decode(output.as_slice()).unwrap();
-        let PublicValuesStruct { n, a, b, icr, collateral_amount } = decoded;
+        let PublicValuesStruct { n, a, b, icr, collateral_amount,liquidation_threshold,real_time_ltv } = decoded;
         println!("n: {}", n);
         println!("a: {}", a);
         println!("b: {}", b);
         println!("icr: {}", icr);
         println!("collateral_amount: {}", collateral_amount);
+        println!("liquidation_threshold: {}", liquidation_threshold);
+        println!("real_time_ltv: {}", real_time_ltv);
 
         let (expected_a, expected_b) = fibonacci_lib::fibonacci(n);
         assert_eq!(a, expected_a);
@@ -111,6 +123,14 @@ async fn main() {
             btc_price_usd,
         );
         assert_eq!(icr, expected_icr);
+        let liquidation_threshold = fibonacci_lib::calculate_liquidation_threshold(
+            args.collateral_amount,
+            args.btc_balance,
+            icr, // <-- pass the ICR value you compute earlier
+        );
+
+        let real_time_ltv = fibonacci_lib::real_time_ltv(args.usbd_loan, args.btc_balance,args.btc_balance);
+        assert_eq!(real_time_ltv, real_time_ltv);
 
         // Record the number of cycles executed.
         println!("Number of cycles: {}", report.total_instruction_count());
