@@ -1,10 +1,6 @@
 //! A simple program that takes a number n as input, and writes the `n-1`th and `n`th fibonacci
 //! number as an output.
 
-// These two lines are necessary for the program to properly compile.
-//
-// Under the hood, we wrap your main function with some extra code so that it behaves properly
-// inside the zkVM.
 #![no_main]
 sp1_zkvm::entrypoint!(main);
 
@@ -19,24 +15,24 @@ use fibonacci_lib::{
 
 pub fn main() {
     // Read inputs
-    let n = sp1_zkvm::io::read::<u32>(); // for fibonacci
-    let collateral_amount = sp1_zkvm::io::read::<u32>(); // for ICR
-    let debt_amount = sp1_zkvm::io::read::<u32>(); // for ICR
-    let btc_price_usd = sp1_zkvm::io::read::<u32>(); // <-- added input for BTC price
-    let usbd_loan = sp1_zkvm::io::read::<u32>(); // for liquidation threshold
-    let btc_balance = sp1_zkvm::io::read::<u32>(); // for real-time LTV
+    let n = sp1_zkvm::io::read::<u32>();               // Fibonacci
+    let collateral_amount = sp1_zkvm::io::read::<u32>(); // BTC collateral (in sats or units)
+    let debt_amount = sp1_zkvm::io::read::<u32>();     // Loan/debt amount
+    let btc_price_usd = sp1_zkvm::io::read::<u32>();   // BTC price in USD
+    let usbd_loan = sp1_zkvm::io::read::<u32>();       // Loan value for LTV
+    let btc_balance = sp1_zkvm::io::read::<u32>();     // BTC balance for LTV
 
     // Compute Fibonacci
     let (a, b) = fibonacci(n);
 
-    // Compute ICR using BTC price
-    let (icr, adjusted_collateral) = calculate_icr(collateral_amount, debt_amount, btc_price_usd);
+    // Compute ICR (and get USD collateral for logging)
+    let (icr, collateral_usd_value) = calculate_icr(collateral_amount, debt_amount, btc_price_usd);
 
-    // Compute liquidation threshold from adjusted collateral
-    let liquidation_threshold = calculate_liquidation_threshold(adjusted_collateral,btc_price_usd,icr);
+    // Use original BTC collateral to avoid double-scaling in threshold
+    let liquidation_threshold = calculate_liquidation_threshold(collateral_amount, btc_price_usd, icr);
 
-    // Compute real-time LTV using loan and BTC balance
-    let real_time_ltv = real_time_ltv(usbd_loan, btc_balance,btc_price_usd);
+    // Compute real-time LTV
+    let real_time_ltv = real_time_ltv(usbd_loan, btc_balance, btc_price_usd);
 
     // Encode and commit public values
     let bytes = PublicValuesStruct::abi_encode(&PublicValuesStruct {
@@ -44,7 +40,7 @@ pub fn main() {
         a,
         b,
         icr,
-        collateral_amount: adjusted_collateral,
+        collateral_amount: collateral_usd_value, // Save the USD-scaled value
         liquidation_threshold,
         real_time_ltv,
     });

@@ -1,154 +1,119 @@
-//! An end-to-end example of using the SP1 SDK to generate a proof of a program that can be executed
-//! or have a core proof generated.
-//!
-//! You can run this script using the following command:
-//! ```shell
-//! RUST_LOG=info cargo run --release -- --execute
-//! ```
-//! or
-//! ```shell
-//! RUST_LOG=info cargo run --release -- --prove
-//! ```
-
-use alloy_sol_types::SolType;
-use clap::Parser;
-use fibonacci_lib::PublicValuesStruct;
-use sp1_sdk::{include_elf, ProverClient, SP1Stdin};
+use axum::{
+    extract::Json,
+    response::IntoResponse,
+    routing::post,
+    Router,
+};
+use fibonacci_lib::{calculate_icr, calculate_liquidation_threshold, real_time_ltv};
+use serde::{Deserialize, Serialize};
+use sp1_sdk::{include_elf, utils::setup_logger, ProverClient, SP1Stdin};
+use std::{fs::File, io::Write, net::SocketAddr};
 use reqwest;
-use serde::Deserialize;
+use anyhow::{Context, Result};
 
-/// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
 pub const FIBONACCI_ELF: &[u8] = include_elf!("fibonacci-program");
 
-/// The arguments for the command.
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[arg(long)]
-    execute: bool,
-
-    #[arg(long)]
-    prove: bool,
-
-    #[arg(long, default_value = "20")]
-    n: u32,
-    #[arg(long, default_value = "20")]
-    collateral_amount: u32,
-    #[arg(long, default_value = "10")]
-    debt_amount: u32,
-    #[arg(long, default_value = "50000")]
-    usbd_loan: u32,
-    #[arg(long, default_value = "5")]
-    btc_balance: u32,
-}
-
 #[derive(Debug, Deserialize)]
-struct BtcPriceResponse {
-    bitcoin: BtcPrice,
+pub struct ProofRequest {
+    pub n: u32,
+    pub collateral_amount: u32,
+    pub debt_amount: u32,
+    pub usbd_loan: u32,
+    pub btc_balance: u32,
 }
 
-#[derive(Debug, Deserialize)]
-struct BtcPrice {
-    usd: f64,
+#[derive(Debug, Serialize)]
+pub struct ProofResponse {
+    pub icr: u32,
+    pub liquidation_threshold: u32,
+    pub real_time_ltv: u32,
+    pub proof_fixture: String,
 }
 
-async fn fetch_btc_price() -> Result<u32, Box<dyn std::error::Error>> {
+async fn prove_icr(Json(req): Json<ProofRequest>) -> impl IntoResponse {
+    match generate_proof(req).await {
+        Ok(resp) => axum::Json(resp).into_response(),
+        Err(e) => {
+            eprintln!("Error generating proof: {}", e); // Log the error to the console
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn fetch_btc_price() -> Result<u32> {
     let url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd";
-    let resp: BtcPriceResponse = reqwest::get(url).await?.json().await?;
-    Ok(resp.bitcoin.usd.round() as u32)
+    let resp = reqwest::get(url).await.context("Failed to fetch BTC price")?;
+    let resp: serde_json::Value = resp.json().await.context("Failed to parse BTC price response")?;
+    Ok(resp["bitcoin"]["usd"]
+        .as_f64()
+        .unwrap_or(0.0) as u32)
+}
+
+async fn generate_proof(req: ProofRequest) -> Result<ProofResponse> {
+    let btc_price_usd = fetch_btc_price().await?;
+
+    let mut stdin = SP1Stdin::new();
+    stdin.write(&req.n);
+    stdin.write(&req.collateral_amount);
+    stdin.write(&req.debt_amount);
+    stdin.write(&btc_price_usd);
+    stdin.write(&req.usbd_loan);
+    stdin.write(&req.btc_balance);
+
+    let client = ProverClient::from_env();
+    let (pk, vk) = client.setup(FIBONACCI_ELF);
+
+    eprintln!("Proving with inputs: {:?}", req);
+
+    match client.prove(&pk, &stdin).run() {
+        Ok(proof) => {
+            eprintln!("Proof generated successfully.");
+
+            match client.verify(&proof, &vk) {
+                Ok(_) => {
+                    eprintln!("Proof verified successfully.");
+                }
+                Err(e) => {
+                    eprintln!("Proof verification failed: {}", e);
+                    return Err(anyhow::anyhow!("Proof verification failed: {}", e).into());
+                }
+            }
+
+            let proof_json = serde_json::to_string_pretty(&proof)?;
+            let mut file = File::create("proof_fixture.json").context("Failed to create file")?;
+            file.write_all(proof_json.as_bytes())
+                .context("Failed to write proof to file")?;
+
+            Ok(ProofResponse {
+                icr: calculate_icr(req.collateral_amount, req.debt_amount, btc_price_usd).0,
+                liquidation_threshold: calculate_liquidation_threshold(
+                    req.collateral_amount,
+                    req.btc_balance,
+                    req.collateral_amount / req.debt_amount,
+                ),
+                real_time_ltv: real_time_ltv(req.usbd_loan, req.btc_balance, req.btc_balance),
+                proof_fixture: proof_json,
+            })
+        }
+        Err(e) => {
+            eprintln!("Proof generation failed: {}", e);
+            Err(anyhow::anyhow!("Proof generation failed: {}", e).into())
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() {
-    // Setup the logger.
-    sp1_sdk::utils::setup_logger();
-    dotenv::dotenv().ok();
+    setup_logger();
 
-    // Parse the command line arguments.
-    let args = Args::parse();
-
-    if args.execute == args.prove {
-        eprintln!("Error: You must specify either --execute or --prove");
-        std::process::exit(1);
-    }
-
-    // === Fetch BTC price in USD ===
-    let btc_price_usd = fetch_btc_price().await.expect("Failed to fetch BTC price");
-    println!("btc_price_usd: {}", btc_price_usd);
-
-    // Setup the prover client.
-    let client = ProverClient::from_env();
-
-    // Setup the inputs.
-    let mut stdin = SP1Stdin::new();
-    stdin.write(&args.n);
-    stdin.write(&args.collateral_amount);
-    stdin.write(&args.debt_amount);
-    stdin.write(&btc_price_usd); // <-- New input
-    stdin.write(&args.usbd_loan);
-    stdin.write(&args.btc_balance);
-
-
-    println!("n: {}", args.n);
-    println!("collateral_amount: {}", args.collateral_amount);
-    println!("debt_amount: {}", args.debt_amount);
-    println!("usbd_loan: {}", args.usbd_loan);
-    println!("btc_balance: {}", args.btc_balance);
-
-
-    if args.execute {
-        // Execute the program
-        let (output, report) = client.execute(FIBONACCI_ELF, &stdin).run().unwrap();
-        println!("Program executed successfully.");
-
-        // Read the output.
-        let decoded = PublicValuesStruct::abi_decode(output.as_slice()).unwrap();
-        let PublicValuesStruct { n, a, b, icr, collateral_amount,liquidation_threshold,real_time_ltv } = decoded;
-        println!("n: {}", n);
-        println!("a: {}", a);
-        println!("b: {}", b);
-        println!("icr: {}", icr);
-        println!("collateral_amount: {}", collateral_amount);
-        println!("liquidation_threshold: {}", liquidation_threshold);
-        println!("real_time_ltv: {}", real_time_ltv);
-
-        let (expected_a, expected_b) = fibonacci_lib::fibonacci(n);
-        assert_eq!(a, expected_a);
-        assert_eq!(b, expected_b);
-        println!("Values are correct!");
-
-        let (expected_icr, expected_collateral_amount) = fibonacci_lib::calculate_icr(
-            args.collateral_amount,
-            args.debt_amount,
-            btc_price_usd,
-        );
-        assert_eq!(icr, expected_icr);
-        let liquidation_threshold = fibonacci_lib::calculate_liquidation_threshold(
-            args.collateral_amount,
-            args.btc_balance,
-            icr, // <-- pass the ICR value you compute earlier
-        );
-
-        let real_time_ltv = fibonacci_lib::real_time_ltv(args.usbd_loan, args.btc_balance,args.btc_balance);
-        assert_eq!(real_time_ltv, real_time_ltv);
-
-        // Record the number of cycles executed.
-        println!("Number of cycles: {}", report.total_instruction_count());
-
-    } else {
-        // Setup the program for proving.
-        let (pk, vk) = client.setup(FIBONACCI_ELF);
-
-        // Generate the proof
-        let proof = client
-            .prove(&pk, &stdin)
-            .run()
-            .expect("failed to generate proof");
-
-        println!("Successfully generated proof!");
-
-        // Verify the proof.
-        client.verify(&proof, &vk).expect("failed to verify proof");
-        println!("Successfully verified proof!");
-    }
+    let app = Router::new().route("/prove_icr", post(prove_icr));
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    println!("Listening on http://{}", addr);
+    axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
+        .await
+        .unwrap();
 }

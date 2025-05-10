@@ -1,57 +1,14 @@
-//! An end-to-end example of using the SP1 SDK to generate a proof of a program that can have an
-//! EVM-Compatible proof generated which can be verified on-chain.
-//!
-//! You can run this script using the following command:
-//! ```shell
-//! RUST_LOG=info cargo run --release --bin evm -- --system groth16
-//! ```
-//! or
-//! ```shell
-//! RUST_LOG=info cargo run --release --bin evm -- --system plonk
-//! ```
-
+use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
 use alloy_sol_types::SolType;
-use clap::{Parser, ValueEnum};
 use fibonacci_lib::PublicValuesStruct;
+use reqwest;
 use serde::{Deserialize, Serialize};
-use sp1_sdk::{
-    include_elf, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1Stdin, SP1VerifyingKey,
-};
-use std::path::PathBuf;
+use sp1_sdk::{include_elf, ProverClient, SP1Stdin, HashableKey};
+use std::error::Error;
 
-/// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
-pub const FIBONACCI_ELF: &[u8] = include_elf!("fibonacci-program");
-
-/// The arguments for the EVM command.
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct EVMArgs {
-    #[arg(long, default_value = "20")]
-    n: u32,
-    #[arg(long, default_value = "20")]
-    collateral_amount: u32,
-    #[arg(long, default_value = "10")]
-    debt_amount: u32,
-    #[arg(long, default_value = "50000")]
-    usbd_loan: u32,
-    #[arg(long, default_value = "5")]
-    btc_balance: u32,
-
-    #[arg(long, value_enum, default_value = "groth16")]
-    system: ProofSystem,
-}
-
-/// Enum representing the available proof systems
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-enum ProofSystem {
-    Plonk,
-    Groth16,
-}
-
-/// A fixture that can be used to test the verification of SP1 zkVM proofs inside Solidity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SP1FibonacciProofFixture {
+pub struct SP1FibonacciProofFixture {
     a: u32,
     b: u32,
     n: u32,
@@ -65,6 +22,16 @@ struct SP1FibonacciProofFixture {
     proof: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GenerateProofRequest {
+    n: u32,
+    collateral_amount: u32,
+    debt_amount: u32,
+    usbd_loan: u32,
+    btc_balance: u32,           // Add this
+    proof_system: String,       // "groth16" or "plonk"
+}
+
 #[derive(Debug, Deserialize)]
 struct BtcPriceResponse {
     bitcoin: BtcPrice,
@@ -75,65 +42,53 @@ struct BtcPrice {
     usd: f64,
 }
 
-async fn fetch_btc_price() -> Result<u32, Box<dyn std::error::Error>> {
-    let url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd";
-    let resp: BtcPriceResponse = reqwest::get(url).await?.json().await?;
-    Ok(resp.bitcoin.usd.round() as u32)
-}
+pub const FIBONACCI_ELF: &[u8] = include_elf!("fibonacci-program");
 
-#[tokio::main]
-async fn main() {
-    // Setup the logger.
-    sp1_sdk::utils::setup_logger();
+#[post("/generate-proof")]
+async fn generate_proof_handler(
+    req: web::Json<GenerateProofRequest>,
+) -> impl Responder {
+    println!("Received proof generation request: {:?}", req);
 
-    // Parse the command line arguments.
-    let args = EVMArgs::parse();
+    // Fetch BTC price
+    let btc_price = match fetch_btc_price().await {
+        Ok(price) => price,
+        Err(e) => {
+            eprintln!("Failed to fetch BTC price: {:?}", e);
+            return HttpResponse::InternalServerError().body("BTC price fetch failed");
+        }
+    };
 
-    // Fetch BTC price in USD.
-    let btc_price_usd = fetch_btc_price().await.expect("Failed to fetch BTC price");
-
-    // Setup the prover client.
+    // Initialize Prover client and keys
     let client = ProverClient::from_env();
-
-    // Setup the program.
     let (pk, vk) = client.setup(FIBONACCI_ELF);
 
-    // Setup the inputs.
+    // Prepare input for SP1
     let mut stdin = SP1Stdin::new();
-    stdin.write(&args.n);
-    stdin.write(&args.collateral_amount);
-    stdin.write(&args.debt_amount);
-    stdin.write(&args.debt_amount);
-    stdin.write(&args.usbd_loan);
-    stdin.write(&btc_price_usd);  // <-- Insert fetched BTC price
+    stdin.write(&req.n);
+    stdin.write(&req.collateral_amount);
+    stdin.write(&req.debt_amount);
+    stdin.write(&(btc_price as u32));           // btc_price_usd
+    stdin.write(&req.usbd_loan);
+    stdin.write(&req.btc_balance);             // Final required value
 
-    println!("n: {}", args.n);
-    println!("collateral_amount: {}", args.collateral_amount);
-    println!("debt_amount: {}", args.debt_amount);
-    println!("usbd_loan: {}", args.usbd_loan);
-    println!("btc_balance: {}", args.btc_balance);
-    println!("btc_price_usd (fetched): {}", btc_price_usd);
-    println!("Proof System: {:?}", args.system);
+    // Run proof system
+    let proof_result = match req.proof_system.as_str() {
+        "plonk" => client.prove(&pk, &stdin).plonk().run(),
+        "groth16" => client.prove(&pk, &stdin).groth16().run(),
+        _ => return HttpResponse::BadRequest().body("Invalid proof system"),
+    };
 
-    // Generate the proof based on the selected proof system.
-    let proof = match args.system {
-        ProofSystem::Plonk => client.prove(&pk, &stdin).plonk().run(),
-        ProofSystem::Groth16 => client.prove(&pk, &stdin).groth16().run(),
-    }
-    .expect("failed to generate proof");
+    let proof = match proof_result {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Proof generation failed: {:?}", e);
+            return HttpResponse::InternalServerError().body("Proof generation failed");
+        }
+    };
 
-    create_proof_fixture(&proof, &vk, args.system, btc_price_usd);
-}
-
-/// Create a fixture for the given proof.
-fn create_proof_fixture(
-    proof: &SP1ProofWithPublicValues,
-    vk: &SP1VerifyingKey,
-    system: ProofSystem,
-    btc_price_usd: u32,
-) {
-    // Deserialize the public values.
-    let bytes = proof.public_values.as_slice();
+    // Decode public values
+    let public_bytes = proof.public_values.as_slice();
     let PublicValuesStruct {
         n,
         a,
@@ -142,8 +97,15 @@ fn create_proof_fixture(
         collateral_amount,
         liquidation_threshold,
         real_time_ltv,
-    } = PublicValuesStruct::abi_decode(bytes).unwrap();
-    // Create the testing fixture so we can test things end-to-end.
+    } = match PublicValuesStruct::abi_decode(public_bytes) {
+        Ok(val) => val,
+        Err(e) => {
+            eprintln!("Decoding public values failed: {:?}", e);
+            return HttpResponse::InternalServerError().body("Failed to decode public values");
+        }
+    };
+
+    // Assemble result fixture
     let fixture = SP1FibonacciProofFixture {
         a,
         b,
@@ -152,21 +114,28 @@ fn create_proof_fixture(
         collateral_amount,
         liquidation_threshold,
         real_time_ltv,
-        btc_price_usd,
-        vkey: vk.bytes32().to_string(),
-        public_values: format!("0x{}", hex::encode(bytes)),
+        btc_price_usd: btc_price as u32,
+        vkey: vk.bytes32(),
+        public_values: format!("0x{}", hex::encode(public_bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
     };
 
-    println!("Verification Key: {}", fixture.vkey);
-    println!("Public Values: {}", fixture.public_values);
-    println!("Proof Bytes: {}", fixture.proof);
+    HttpResponse::Ok().json(fixture)
+}
 
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contracts/src/fixtures");
-    std::fs::create_dir_all(&fixture_path).expect("failed to create fixture path");
-    std::fs::write(
-        fixture_path.join(format!("{:?}-fixture.json", system).to_lowercase()),
-        serde_json::to_string_pretty(&fixture).unwrap(),
-    )
-    .expect("failed to write fixture");
+async fn fetch_btc_price() -> Result<f64, Box<dyn Error>> {
+    let url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd";
+    let resp: BtcPriceResponse = reqwest::get(url).await?.json().await?;
+    Ok(resp.bitcoin.usd)
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    sp1_sdk::utils::setup_logger();
+    println!("Starting Actix-web SP1 proof server on http://localhost:8080");
+
+    HttpServer::new(|| App::new().service(generate_proof_handler))
+        .bind(("127.0.0.1", 8080))?
+        .run()
+        .await
 }
