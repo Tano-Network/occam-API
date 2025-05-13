@@ -1,6 +1,9 @@
 [workspace]
 members = [
     "lib",
+    "Icr",
+    "Liquid",
+    "Real_time_ltv",
     "program",
     "script",
 ]

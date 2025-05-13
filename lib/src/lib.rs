@@ -8,6 +8,20 @@ sol! {
         uint32 liquidation_threshold;
         uint32 real_time_ltv;
     }
+
+    struct PublicValuesIcr{
+        uint32 icr;
+        uint32 collateral_amount;
+       
+}
+    struct PublicValuesLiquidation{
+        uint32 liquidation_threshold;
+        
+    }
+    struct PublicValuesLtv{
+        uint32 real_time_ltv;
+        
+    }
 }
 
 /// Calculate the ICR and USD value of the collateral.
