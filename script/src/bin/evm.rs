@@ -6,6 +6,7 @@ use sp1_sdk::{include_elf, ProverClient, SP1Stdin, HashableKey};
 use std::error::Error;
 use hex;
 use fibonacci_lib::{PublicValuesStruct, PublicValuesIcr, PublicValuesLiquidation, PublicValuesLtv};
+use sp1_sdk::utils::setup_logger;
 
 // Program binary
 pub const DeFi_ELF: &[u8] = include_elf!("fibonacci-program");
