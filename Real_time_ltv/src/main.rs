@@ -1,40 +1,31 @@
-//! A program that computes DeFi metrics (ICR, liquidation threshold, LTV) for a BTC-collateralized
-//! loan system, committing the results as public values in a zkVM.
-
 #![no_main]
 sp1_zkvm::entrypoint!(main);
 
-use alloy_sol_types::SolType;
-use fibonacci_lib::{
-    real_time_ltv,
-    
-    PublicValuesLtv
-};
+use alloy_sol_types::SolValue;
+use fibonacci_lib::{PublicValuesLtv, real_time_ltv};
+use hex;
 
 pub fn main() {
-    // Read inputs from zkVM
-    let collateral_amount = sp1_zkvm::io::read::<u32>(); // BTC collateral (in units, e.g., scaled)
+    // Read inputs in the order written by evm.rs
     let debt_amount = sp1_zkvm::io::read::<u32>();       // Debt amount (in USD, scaled)
+    let collateral_amount = sp1_zkvm::io::read::<u32>(); // BTC collateral (in units, e.g., scaled)
     let btc_price_usd = sp1_zkvm::io::read::<u32>();     // BTC price in USD
-    // let min_icr = sp1_zkvm::io::read::<u32>();           // Minimum ICR required (e.g., 150 for 150%)
 
-    // Compute ICR and collateral value in USD
-    // let (icr, collateral_usd_value) = calculate_icr(collateral_amount, debt_amount, btc_price_usd);
+    eprintln!("Inputs: debt_amount={}, collateral_amount={}, btc_price_usd={}", 
+             debt_amount, collateral_amount, btc_price_usd);
 
-    // Compute liquidation threshold
-    // let liquidation_threshold = calculate_liquidation_threshold(collateral_amount, btc_price_usd, min_icr);
-
-    // // Compute real-time LTV
+    // Compute real-time LTV
     let real_time_ltv = real_time_ltv(debt_amount, collateral_amount, btc_price_usd);
+    eprintln!("Computed LTV: {}", real_time_ltv);
 
-    // Encode public values into PublicValuesStruct
+    // Encode public values into PublicValuesLtv
     let public_values = PublicValuesLtv {
-       
         real_time_ltv,
     };
 
     // ABI-encode the public values
-    let bytes = PublicValuesLtv::abi_encode(&public_values);
+    let bytes = public_values.abi_encode();
+    eprintln!("Encoded public values: 0x{}", hex::encode(&bytes));
 
     // Commit the encoded public values to the zkVM
     sp1_zkvm::io::commit_slice(&bytes);

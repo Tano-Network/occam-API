@@ -64,7 +64,6 @@ pub fn real_time_ltv(
     if collateral_amount == 0 || btc_price_usd == 0 {
         return 0;
     }
-
     let collateral_value = collateral_amount as u64 * btc_price_usd as u64;
-    ((debt_amount as u64 * 100) / collateral_value) as u32 // Returns percentage
+    ((debt_amount as u64 * 100) / collateral_value) as u32
 }
