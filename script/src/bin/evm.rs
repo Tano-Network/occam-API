@@ -478,14 +478,22 @@ async fn fetch_users_data() -> Result<Vec<UserData>, Box<dyn std::error::Error +
     Ok(users)
 }
 
+
+// === Root route ===
+#[get("/")]
+async fn index() -> impl Responder {
+    HttpResponse::Ok().body("SP1 Proof Server is running!")
+}
+
 // === Main function ===
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    sp1_sdk::utils::setup_logger();
+    setup_logger();
     println!("Starting DeFi SP1 proof server on http://localhost:8080");
 
     HttpServer::new(|| {
         App::new()
+            .service(index) // Root health check route
             .service(generate_proof_handler)
             .service(generate_proof_batch_handler)
             .service(prove_icr_final)
