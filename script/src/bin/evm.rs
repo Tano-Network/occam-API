@@ -326,7 +326,7 @@ async fn fetch_btc_price() -> Result<f64, Box<dyn Error>> {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    sp1_sdk::utils::setup_logger();
+    setup_logger();
     println!("Starting DeFi SP1 proof server on http://localhost:8080");
 
     HttpServer::new(|| {
