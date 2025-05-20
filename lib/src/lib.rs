@@ -24,21 +24,24 @@ sol! {
     }
 }
 
+const SCALE: u64 = 100; // Supports two decimal places
+
 /// Calculate the ICR and USD value of the collateral.
 pub fn calculate_icr(
     collateral_amount: u32,
     debt_amount: u32,
     btc_price_usd: u32,
 ) -> (u32, u32) {
-    let collateral_amount_to_usd = (collateral_amount as u64 * btc_price_usd as u64) as u32;
+
+    let collateral_usd = (collateral_amount as u64 * btc_price_usd as u64) as u32;
 
     let icr = if debt_amount == 0 {
         0
     } else {
-        ((collateral_amount as u64 * btc_price_usd as u64) / debt_amount as u64) as u32
+        ((collateral_amount as u64 * btc_price_usd as u64 * SCALE) / debt_amount as u64) as u32
     };
 
-    (icr, collateral_amount_to_usd)
+    (icr, collateral_usd)
 }
 
 /// Calculate the liquidation threshold from collateral value and minimum ICR.
@@ -65,5 +68,5 @@ pub fn real_time_ltv(
         return 0;
     }
     let collateral_value = collateral_amount as u64 * btc_price_usd as u64;
-    ((debt_amount as u64 * 100) / collateral_value) as u32
+    ((debt_amount as u64 * SCALE) / collateral_value) as u32
 }
