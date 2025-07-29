@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use sp1_sdk::{include_elf, ProverClient, SP1Stdin, setup_logger, HashableKey};
 use std::error::Error;
 use hex;
-use fibonacci_lib::{ PublicValuesIcr, PublicValuesLiquidation, PublicValuesLtv};
+use fibonacci_lib::{PublicValuesIcr, PublicValuesLiquidation, PublicValuesLtv};
+use fibonacci_lib::{PublicValuesBtcHoldings, Utxo, BtcHoldingsInput};
 use tokio::task;
 use anyhow::Result;
 
@@ -18,6 +19,8 @@ pub const ICR_ELF: &[u8] = include_elf!("icr-program");
 pub const LIQUIDATION_ELF: &[u8] = include_elf!("liquid-program");
 #[allow(unused_variables, unused_imports, dead_code)]
 pub const REAL_TIME_LTV_ELF: &[u8] = include_elf!("Real_time_ltv-program");
+#[allow(unused_variables, unused_imports, dead_code)]
+pub const putCall_ELF: &[u8] = include_elf!("putCall-program");
 
 // Minimum ICR required (150%)
 const MIN_ICR: u32 = 150;
@@ -38,8 +41,66 @@ pub struct ProofResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BtcHoldingsRequest {
+    btc_address: String,
+    org_id: String,
+    call_value: String,
+    put_value: String,
+    proof_system: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BtcHoldingsResponse {
+    total_btc: u64,
+    org_hash: String,
+    call_value: String,
+    put_value: String,
+    vkey: String,
+    public_values: String,
+    proof: String,
+    verifier_version: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BlockstreamUtxo {
+    txid: String,
+    vout: u32,
+    value: u64,
+}
+
+// Helper struct for BTC balance fetch
+#[derive(Debug, Deserialize)]
+struct UtxoValue {
+    value: u64, // in satoshis
+}
+
+pub async fn fetch_user_btc_balance(user_address: &str) -> Result<f64, Box<dyn std::error::Error>> {
+    let url = format!("https://mempool.space/api/address/{}/utxo", user_address);
+    let response = reqwest::get(&url).await?;
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch UTXO: {}", response.status()).into());
+    }
+    let utxos: Vec<UtxoValue> = response.json().await?;
+    let total_sats: u64 = utxos.iter().map(|u| u.value).sum();
+    let total_btc = total_sats as f64 / 100_000_000.0;
+    Ok(total_btc)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserDataLiquidationResponse {
     liquidation_threshold: u32,
+    vkey: String,
+    public_values: String,
+    proof: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalysisResponse {
+    user_address: String,
+    reward_amount: u32,
     vkey: String,
     public_values: String,
     proof: String,
@@ -55,9 +116,27 @@ pub struct UserDataLiquidation {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UserCatalysis {
+    user_address: String,
+    reward_amount: u32,
+    proof_system: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProofResponseIcr {
     icr: u32,
     collateral_value_usd: u32,
+    vkey: String,
+    public_values: String,
+    proof: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProofResponseUserBalance {
+    user_address: String,
+    btc_price_usd: u32,
     vkey: String,
     public_values: String,
     proof: String,
@@ -90,6 +169,12 @@ pub struct ProofRequestLtv {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UserAddress {
+    user_address: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IcrResponse {
     icr: u32,
     vkey: String,
@@ -114,8 +199,6 @@ struct BtcPrice {
     usd: f64,
 }
 
-
-
 #[post("/generate-proof-icr")]
 async fn prove_icr_final(req: web::Json<ProofRequestIcr>) -> impl Responder {
     println!("Received ICR proof generation request: {:?}", req);
@@ -129,7 +212,6 @@ async fn prove_icr_final(req: web::Json<ProofRequestIcr>) -> impl Responder {
     };
     let btc_price_usd = btc_price as u32;
 
-    // Wrap blocking operations in spawn_blocking
     let proof_result = task::spawn_blocking(move || {
         let client = ProverClient::from_env();
         let (pk, vk) = client.setup(ICR_ELF);
@@ -194,7 +276,6 @@ async fn prove_liquidation(req: web::Json<UserDataLiquidation>) -> impl Responde
     };
     let btc_price_usd = btc_price as u32;
 
-    // Wrap blocking operations in spawn_blocking
     let proof_result = task::spawn_blocking(move || {
         let client = ProverClient::from_env();
         let (pk, vk) = client.setup(LIQUIDATION_ELF);
@@ -258,7 +339,6 @@ async fn prove_ltv(req: web::Json<ProofRequestLtv>) -> impl Responder {
     };
     let btc_price_usd = btc_price as u32;
 
-    // Wrap blocking operations in spawn_blocking
     let proof_result = task::spawn_blocking(move || {
         let client = ProverClient::from_env();
         let (pk, vk) = client.setup(REAL_TIME_LTV_ELF);
@@ -309,6 +389,108 @@ async fn prove_ltv(req: web::Json<ProofRequestLtv>) -> impl Responder {
     HttpResponse::Ok().json(response)
 }
 
+#[post("/prove-btc-holdings")]
+async fn prove_btc_holdings(req: web::Json<BtcHoldingsRequest>) -> impl Responder {
+    println!("Received BTC holdings proof request: {:?}", req);
+
+    let utxos = match fetch_utxos(&req.btc_address).await {
+        Ok(utxos) => utxos,
+        Err(e) => {
+            eprintln!("Failed to fetch UTXOs: {:?}", e);
+            return HttpResponse::InternalServerError().body(format!("UTXO fetch failed: {}", e));
+        }
+    };
+
+    if utxos.is_empty() {
+        return HttpResponse::BadRequest().body("No UTXOs found for the address");
+    }
+
+    let expected_total = utxos.iter().map(|u| u.value).sum::<u64>();
+    let org_id = req.org_id.clone();
+    let proof_system = req.proof_system.clone();
+    let total_call_value = req.call_value.parse::<u64>().unwrap_or(0);
+    let total_put_value = req.put_value.parse::<u64>().unwrap_or(0);
+
+    let proof_result = task::spawn_blocking(move || {
+        let client = ProverClient::from_env();
+        let (pk, vk) = client.setup(putCall_ELF);
+        let mut stdin = sp1_sdk::SP1Stdin::new();
+
+        let utxos = utxos
+            .into_iter()
+            .map(|u| {
+                let txid = hex::decode(&u.txid).expect("valid txid hex");
+                let pubkey = vec![0u8; 33]; // dummy compressed pubkey
+                Utxo {
+                    txid: txid.try_into().expect("32 bytes"),
+                    index: u.vout,
+                    amount: u.value,
+                    pubkey,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let input = BtcHoldingsInput {
+            utxos,
+            signatures: vec![],
+            expected_total,
+            org_id,
+            total_call_value: total_call_value.to_string(),
+            total_put_value: total_put_value.to_string(),
+        };
+        stdin.write(&input);
+
+        let proof_result = match proof_system.as_str() {
+            "plonk" => client.prove(&pk, &stdin).plonk().run(),
+            "groth16" => client.prove(&pk, &stdin).groth16().run(),
+            _ => return Err(anyhow::anyhow!("Invalid proof system")),
+        };
+        Ok(proof_result.map(|proof| (proof, vk))?)
+    })
+    .await;
+
+    let (proof, vk) = match proof_result {
+        Ok(Ok((proof, vk))) => (proof, vk),
+        Ok(Err(e)) => {
+            eprintln!("Proof generation failed: {:?}", e);
+            return HttpResponse::InternalServerError().body(format!("Proof generation failed: {}", e));
+        }
+        Err(e) => {
+            eprintln!("Proof generation task failed: {:?}", e);
+            return HttpResponse::InternalServerError().body("Proof generation task failed");
+        }
+    };
+
+    let public_bytes = proof.public_values.as_slice();
+    let public_values = match PublicValuesBtcHoldings::abi_decode(public_bytes) {
+        Ok(val) => val,
+        Err(e) => {
+            eprintln!("Decoding public values failed: {:?}", e);
+            return HttpResponse::InternalServerError().body("Failed to decode public values");
+        }
+    };
+
+    let response = BtcHoldingsResponse {
+        total_btc: public_values.total_btc,
+        org_hash: format!("0x{}", hex::encode(public_values.org_hash)),
+        put_value: public_values.total_put_value.to_string(),
+        call_value: public_values.total_call_value.to_string(),
+        vkey: vk.bytes32(),
+        public_values: format!("0x{}", hex::encode(public_bytes)),
+        proof: format!("0x{}", hex::encode(proof.bytes())),
+        verifier_version: "0x1234abcd".to_string(),
+    };
+
+    HttpResponse::Ok().json(response)
+}
+
+async fn fetch_utxos(address: &str) -> Result<Vec<BlockstreamUtxo>, Box<dyn Error>> {
+    let url = format!("https://blockstream.info/api/address/{}/utxo", address);
+    let resp = reqwest::get(&url).await?;
+    let utxos: Vec<BlockstreamUtxo> = resp.json().await?;
+    Ok(utxos)
+}
+
 // === Helper functions ===
 async fn fetch_btc_price() -> Result<f64, Box<dyn Error>> {
     let url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd";
@@ -322,8 +504,6 @@ async fn fetch_btc_price() -> Result<f64, Box<dyn Error>> {
     Ok(json.bitcoin.usd)
 }
 
-
-
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     setup_logger();
@@ -334,6 +514,7 @@ async fn main() -> std::io::Result<()> {
             .service(prove_icr_final)
             .service(prove_liquidation)
             .service(prove_ltv)
+            .service(prove_btc_holdings)
     })
     .workers(4)
     .bind(("0.0.0.0", 8080))?

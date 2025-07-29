@@ -423,9 +423,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-primitives"
-version = "1.0.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70b98b99c1dcfbe74d7f0b31433ff215e7d1555e367d90e62db904f3c9d4ff53"
+checksum = "6177ed26655d4e84e00b65cb494d4e0b8830e7cae7ef5d63087d445a2600fb55"
 dependencies = [
  "alloy-rlp",
  "bytes",
@@ -2068,6 +2068,8 @@ name = "fibonacci-lib"
 version = "0.1.0"
 dependencies = [
  "alloy-sol-types",
+ "serde",
+ "sha2",
 ]
 
 [[package]]
@@ -4086,6 +4088,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.100",
+]
+
+[[package]]
+name = "putCall-program"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "fibonacci-lib",
+ "sha2",
+ "sp1-zkvm",
 ]
 
 [[package]]

@@ -6,6 +6,9 @@ members = [
     "Real_time_ltv",
     "program",
     "script",
+    
+    
+    "BimaOccumPutCall"
 ]
 resolver = "2"
 
