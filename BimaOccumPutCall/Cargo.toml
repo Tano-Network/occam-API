@@ -7,7 +7,7 @@ edition = "2021"
 alloy-sol-types = { workspace = true }
 
 
-sp1-zkvm = "4.2.0"
+sp1-zkvm = "5.1.0"
 sha2 = "0.10"
 fibonacci-lib = { path = "../lib" }
 alloy-primitives = "1.2.1"
