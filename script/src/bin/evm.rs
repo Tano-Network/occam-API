@@ -9,6 +9,10 @@ use fibonacci_lib::{PublicValuesIcr, PublicValuesLiquidation, PublicValuesLtv};
 use fibonacci_lib::{PublicValuesBtcHoldings, Utxo, BtcHoldingsInput};
 use tokio::task;
 use anyhow::Result;
+use sp1_sdk::SP1ProofMode;
+use sp1_sdk::Prover; // <== Required for `.setup(...)`
+use sp1_sdk::network::FulfillmentStrategy; // <== Required for `.strategy(...)`
+
 
 // Program binary
 #[allow(unused_variables, unused_imports, dead_code)]
@@ -62,7 +66,7 @@ pub struct BtcHoldingsResponse {
     verifier_version: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize,Clone)]
 struct BlockstreamUtxo {
     txid: String,
     vout: u32,
@@ -393,6 +397,7 @@ async fn prove_ltv(req: web::Json<ProofRequestLtv>) -> impl Responder {
 async fn prove_btc_holdings(req: web::Json<BtcHoldingsRequest>) -> impl Responder {
     println!("Received BTC holdings proof request: {:?}", req);
 
+    // === Step 1: Fetch UTXOs ===
     let utxos = match fetch_utxos(&req.btc_address).await {
         Ok(utxos) => utxos,
         Err(e) => {
@@ -405,50 +410,65 @@ async fn prove_btc_holdings(req: web::Json<BtcHoldingsRequest>) -> impl Responde
         return HttpResponse::BadRequest().body("No UTXOs found for the address");
     }
 
-    let expected_total = utxos.iter().map(|u| u.value).sum::<u64>();
+    // === Step 2: Clone for move into spawn_blocking ===
     let org_id = req.org_id.clone();
     let proof_system = req.proof_system.clone();
-    let total_call_value = req.call_value.parse::<u64>().unwrap_or(0);
-    let total_put_value = req.put_value.parse::<u64>().unwrap_or(0);
+    let total_call_value = req.call_value.clone();
+    let total_put_value = req.put_value.clone();
+    let utxos_for_task = utxos.clone();
 
+    // === Step 3: Run proof generation in blocking task ===
     let proof_result = task::spawn_blocking(move || {
-        let client = ProverClient::from_env();
-        let (pk, vk) = client.setup(putCall_ELF);
-        let mut stdin = sp1_sdk::SP1Stdin::new();
+        let client = ProverClient::builder().network().build();
+        let (pk, vk) = client.setup(putCall_ELF); // ensure putCall_ELF is defined elsewhere
 
-        let utxos = utxos
+        // === Build stdin ===
+        let mut stdin = SP1Stdin::new();
+
+        // Convert UTXOs into circuit format
+        let converted_utxos: Vec<Utxo> = utxos_for_task
             .into_iter()
-            .map(|u| {
-                let txid = hex::decode(&u.txid).expect("valid txid hex");
-                let pubkey = vec![0u8; 33]; // dummy compressed pubkey
-                Utxo {
-                    txid: txid.try_into().expect("32 bytes"),
+            .filter_map(|u| {
+                let txid_decoded = hex::decode(&u.txid).ok()?;
+                let txid_bytes: [u8; 32] = txid_decoded.try_into().ok()?;
+                Some(Utxo {
+                    txid: txid_bytes,
                     index: u.vout,
                     amount: u.value,
-                    pubkey,
-                }
+                    pubkey: vec![0u8; 33], // Dummy pubkey
+                })
             })
-            .collect::<Vec<_>>();
+            .collect();
+
+        let expected_total = converted_utxos.iter().map(|u| u.amount).sum::<u64>();
 
         let input = BtcHoldingsInput {
-            utxos,
-            signatures: vec![],
+            utxos: converted_utxos,
+            signatures: vec![], // Add actual signatures later if needed
             expected_total,
             org_id,
-            total_call_value: total_call_value.to_string(),
-            total_put_value: total_put_value.to_string(),
+            total_call_value: total_call_value.clone(),
+            total_put_value: total_put_value.clone(),
         };
+
         stdin.write(&input);
 
-        let proof_result = match proof_system.as_str() {
-            "plonk" => client.prove(&pk, &stdin).plonk().run(),
-            "groth16" => client.prove(&pk, &stdin).groth16().run(),
+        // === Prove ===
+        let builder = client.prove(&pk, &stdin);
+        let builder = match proof_system.as_str() {
+            "groth16" => builder.mode(SP1ProofMode::Groth16),
+            "plonk" => builder.mode(SP1ProofMode::Plonk),
             _ => return Err(anyhow::anyhow!("Invalid proof system")),
         };
-        Ok(proof_result.map(|proof| (proof, vk))?)
+
+        let builder = builder.strategy(FulfillmentStrategy::Hosted);
+
+        let proof = builder.run()?;
+        Ok((proof, vk))
     })
     .await;
 
+    // === Step 4: Handle proof result ===
     let (proof, vk) = match proof_result {
         Ok(Ok((proof, vk))) => (proof, vk),
         Ok(Err(e)) => {
@@ -456,11 +476,12 @@ async fn prove_btc_holdings(req: web::Json<BtcHoldingsRequest>) -> impl Responde
             return HttpResponse::InternalServerError().body(format!("Proof generation failed: {}", e));
         }
         Err(e) => {
-            eprintln!("Proof generation task failed: {:?}", e);
+            eprintln!("Proof generation task panicked: {:?}", e);
             return HttpResponse::InternalServerError().body("Proof generation task failed");
         }
     };
 
+    // === Step 5: Decode public values ===
     let public_bytes = proof.public_values.as_slice();
     let public_values = match PublicValuesBtcHoldings::abi_decode(public_bytes) {
         Ok(val) => val,
@@ -470,6 +491,7 @@ async fn prove_btc_holdings(req: web::Json<BtcHoldingsRequest>) -> impl Responde
         }
     };
 
+    // === Step 6: Build Response ===
     let response = BtcHoldingsResponse {
         total_btc: public_values.total_btc,
         org_hash: format!("0x{}", hex::encode(public_values.org_hash)),
@@ -478,12 +500,11 @@ async fn prove_btc_holdings(req: web::Json<BtcHoldingsRequest>) -> impl Responde
         vkey: vk.bytes32(),
         public_values: format!("0x{}", hex::encode(public_bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
-        verifier_version: "0x1234abcd".to_string(),
+        verifier_version: "0x1234abcd".to_string(), // TODO: Replace with actual version
     };
 
     HttpResponse::Ok().json(response)
 }
-
 async fn fetch_utxos(address: &str) -> Result<Vec<BlockstreamUtxo>, Box<dyn Error>> {
     let url = format!("https://blockstream.info/api/address/{}/utxo", address);
     let resp = reqwest::get(&url).await?;
