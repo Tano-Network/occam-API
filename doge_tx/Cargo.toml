@@ -1,0 +1,13 @@
+[package]
+version = "0.1.0"
+name = "doge_tx-program"
+edition = "2021"
+
+[dependencies]
+alloy-sol-types = { workspace = true }
+
+
+sp1-zkvm = "5.1.0"
+sha2 = "0.10"
+fibonacci-lib = { path = "../lib" }
+alloy-primitives = "1.2.1"

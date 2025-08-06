@@ -6,6 +6,7 @@ members = [
     "Real_time_ltv",
     "program",
     "script",
+    "doge_tx",
     
     
     "BimaOccumPutCall"

@@ -1490,6 +1490,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "doge_tx-program"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "fibonacci-lib",
+ "sha2",
+ "sp1-zkvm",
+]
+
+[[package]]
 name = "dotenv"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
