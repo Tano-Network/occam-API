@@ -10,6 +10,7 @@ use fibonacci_lib::{PublicValuesBtcHoldings, Utxo, BtcHoldingsInput, PublicValue
 use tokio::task;
 use anyhow::Result;
 use sp1_sdk::SP1ProofMode;
+use anyhow::anyhow;
 use sp1_sdk::Prover;
 use sp1_sdk::network::FulfillmentStrategy;
 
@@ -597,7 +598,7 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         let mut stdin = SP1Stdin::new();
 
         let txid_decoded = hex::decode(&tx_hash).map_err(|e| anyhow::anyhow!("Invalid tx hash: {}", e))?;
-        let txid_bytes: [u8; 32] = txid_decoded.try_into().map_err(|e| anyhow::anyhow!("Invalid tx hash length: {}", e))?;
+        let txid_bytes: [u8; 32] = txid_decoded.try_into().map_err(|e| anyhow!("Invalid tx hash length: {:?}", e))?;
 
         let input = DogeTxInput {
             txid: txid_bytes,
