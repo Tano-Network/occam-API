@@ -83,7 +83,6 @@ pub struct DogeTxResponse {
     vkey: String,
     public_values: String,
     proof: String,
-    proof: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -717,5 +716,6 @@ async fn main() -> std::io::Result<()> {
     .await
 
 }
+
 
 
