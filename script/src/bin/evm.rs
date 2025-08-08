@@ -83,6 +83,7 @@ pub struct DogeTxResponse {
     vkey: String,
     public_values: String,
     proof: String,
+    request_id: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -554,11 +555,6 @@ async fn prove_btc_holdings(req: web::Json<BtcHoldingsRequest>) -> impl Responde
 async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder {
     println!("Received Dogecoin transaction proof request: {:?}", req);
 
-    // Validate transaction hash length (must be 64 hex characters for 32 bytes)
-    if req.tx_hash.len() != 64 {
-        return HttpResponse::BadRequest().body("Invalid transaction hash: expected 64 hex characters");
-    }
-
     // === Step 1: Fetch transaction details ===
     let tx_details = match fetch_doge_tx(&req.tx_hash).await {
         Ok(details) => details,
@@ -625,13 +621,17 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         let builder = builder.strategy(FulfillmentStrategy::Hosted);
 
         let proof = builder.run()?;
-        Ok((proof, vk))
+        let proof_id = proof
+            .proof_id
+            .ok_or_else(|| anyhow::anyhow!("Proof ID not available for hosted proof"))?;
+
+        Ok((proof, vk, proof_id))
     })
     .await;
 
     // === Step 5: Handle proof result ===
-    let (proof, vk) = match proof_result {
-        Ok(Ok((proof, vk))) => (proof, vk),
+    let (proof, vk, proof_id) = match proof_result {
+        Ok(Ok((proof, vk, proof_id))) => (proof, vk, proof_id),
         Ok(Err(e)) => {
             eprintln!("Proof generation failed: {:?}", e);
             return HttpResponse::InternalServerError().body(format!("Proof generation failed: {}", e));
@@ -659,6 +659,7 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         vkey: vk.bytes32(),
         public_values: format!("0x{}", hex::encode(public_bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
+        request_id: proof_id, // Include the proof ID
     };
 
     HttpResponse::Ok().json(response)
@@ -711,11 +712,9 @@ async fn main() -> std::io::Result<()> {
             .service(prove_doge_transaction)
     })
     .workers(4)
-    .bind(("0.0.0.0", 3006))?
+    .bind(("0.0.0.0", 3005))?
     .run()
     .await
 
 }
-
-
 
