@@ -695,7 +695,7 @@ async fn fetch_btc_price() -> Result<f64, Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     setup_logger();
-    println!("Starting DeFi SP1 proof server on http://localhost:8080");
+    println!("Starting DeFi SP1 proof server on http://localhost:3005");
 
     HttpServer::new(|| {
         App::new()
@@ -706,7 +706,8 @@ async fn main() -> std::io::Result<()> {
             .service(prove_doge_transaction)
     })
     .workers(4)
-    .bind(("0.0.0.0", 8080))?
+    .bind(("0.0.0.0", 3005))?
     .run()
     .await
+
 }
