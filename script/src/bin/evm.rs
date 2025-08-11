@@ -1,4 +1,4 @@
-use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
+in this code should i get request id so i can verify on explorer use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
 use alloy_sol_types::SolType;
 use reqwest;
 use serde::{Deserialize, Serialize};
@@ -83,7 +83,6 @@ pub struct DogeTxResponse {
     vkey: String,
     public_values: String,
     proof: String,
-    request_id: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -621,17 +620,13 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         let builder = builder.strategy(FulfillmentStrategy::Hosted);
 
         let proof = builder.run()?;
-        let proof_id = proof
-            .proof_id
-            .ok_or_else(|| anyhow::anyhow!("Proof ID not available for hosted proof"))?;
-
-        Ok((proof, vk, proof_id))
+        Ok((proof, vk))
     })
     .await;
 
     // === Step 5: Handle proof result ===
-    let (proof, vk, proof_id) = match proof_result {
-        Ok(Ok((proof, vk, proof_id))) => (proof, vk, proof_id),
+    let (proof, vk) = match proof_result {
+        Ok(Ok((proof, vk))) => (proof, vk),
         Ok(Err(e)) => {
             eprintln!("Proof generation failed: {:?}", e);
             return HttpResponse::InternalServerError().body(format!("Proof generation failed: {}", e));
@@ -659,7 +654,6 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         vkey: vk.bytes32(),
         public_values: format!("0x{}", hex::encode(public_bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
-        request_id: proof_id, // Include the proof ID
     };
 
     HttpResponse::Ok().json(response)
@@ -717,4 +711,3 @@ async fn main() -> std::io::Result<()> {
     .await
 
 }
-
