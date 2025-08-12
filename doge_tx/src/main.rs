@@ -10,7 +10,7 @@ pub fn main() {
     let input: DogeTxInput = sp1_zkvm::io::read();
 
     // Verify recipient address (hardcoded for simplicity)
-    let expected_recipient = "DPGGRKJaKtTkNhc6uodtdyQEyv8RsWxL6H";
+    let expected_recipient = "DHGrS3MYGyKzRVdMNxziTPF7QXvaYoEndA";
     assert_eq!(input.recipient_address, expected_recipient, "Recipient address mismatch");
 
     // Hash the sender address
@@ -25,4 +25,5 @@ pub fn main() {
 
     let bytes = PublicValuesDogeTx::abi_encode(&public_values);
     sp1_zkvm::io::commit_slice(&bytes);
+
 }
