@@ -706,10 +706,11 @@ async fn main() -> std::io::Result<()> {
             .service(prove_doge_transaction)
     })
     .workers(4)
-    .bind(("0.0.0.0", 3006))?
+    .bind(("0.0.0.0", 3005))?
     .run()
     .await
 
 }
+
 
 
