@@ -3,28 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 sol! {
-    struct PublicValuesStruct {
-        uint32 icr;
-        uint32 collateral_amount; // USD-scaled
-        uint32 liquidation_threshold;
-        uint32 real_time_ltv;
-    }
-    struct PublicValuesIcr {
-        uint32 icr;
-        uint32 collateral_amount; // USD-scaled
-    }
-    struct PublicValuesLiquidation {
-        uint32 liquidation_threshold;
-    }
-    struct PublicValuesLtv {
-        uint32 real_time_ltv;
-    }
-    struct PublicValuesBtcHoldings {
-        uint64 total_btc; // Satoshis
-        uint64 total_put_value;
-        uint64 total_call_value;
-        bytes32 org_hash; // SHA256 of org_id
-    }
+    
     struct PublicValuesDogeTx {
         uint64 total_doge; // Dogecoins in satoshis
         bytes32 sender_address_hash; // SHA256 of sender address
@@ -106,32 +85,7 @@ where
     Ok(vec)
 }
 
-pub fn calculate_icr(collateral_amount: u32, debt_amount: u32, btc_price_usd: u32) -> (u32, u32) {
-    let collateral_usd = collateral_amount.saturating_mul(btc_price_usd);
-    let icr = if debt_amount == 0 {
-        u32::MAX
-    } else {
-        collateral_usd.saturating_mul(100).saturating_div(debt_amount)
-    };
-    (icr, collateral_usd)
-}
 
-pub fn calculate_liquidation_threshold(
-    collateral_amount: u32,
-    btc_price_usd: u32,
-    min_icr: u32,
-) -> u32 {
-    let collateral_usd = collateral_amount.saturating_mul(btc_price_usd);
-    collateral_usd.saturating_mul(100).saturating_div(min_icr)
-}
-
-pub fn real_time_ltv(debt_amount: u32, collateral_amount: u32, btc_price_usd: u32) -> u32 {
-    if collateral_amount == 0 {
-        return 0;
-    }
-    let collateral_usd = collateral_amount.saturating_mul(btc_price_usd);
-    debt_amount.saturating_mul(100).saturating_div(collateral_usd)
-}
 
 pub fn compute_org_hash(org_id: &str) -> [u8; 32] {
     Sha256::digest(org_id.as_bytes()).into()
