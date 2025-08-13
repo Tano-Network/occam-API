@@ -13,9 +13,7 @@ use anyhow::anyhow;
 use sp1_sdk::Prover;
 use sp1_sdk::network::FulfillmentStrategy;
 
-// Program binary
-#[allow(unused_variables, unused_imports, dead_code)]
-pub const DEFI_ELF: &[u8] = include_elf!("fibonacci-program");
+
 #[allow(unused_variables, unused_imports, dead_code)]
 pub const DOGE_TX_ELF: &[u8] = include_elf!("doge_tx-program");
 
@@ -238,6 +236,7 @@ async fn main() -> std::io::Result<()> {
     .await
 
 }
+
 
 
 
