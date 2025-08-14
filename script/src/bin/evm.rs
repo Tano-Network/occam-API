@@ -231,11 +231,12 @@ async fn main() -> std::io::Result<()> {
             .service(prove_doge_transaction)
     })
     .workers(1)
-    .bind(("0.0.0.0", 3005))?
+    .bind(("0.0.0.0", 3007))?
     .run()
     .await
 
 }
+
 
 
 
