@@ -3,16 +3,6 @@
 version = 4
 
 [[package]]
-name = "Real_time_ltv-program"
-version = "0.1.0"
-dependencies = [
- "alloy-sol-types",
- "fibonacci-lib",
- "hex",
- "sp1-zkvm",
-]
-
-[[package]]
 name = "actix-codec"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1730,15 +1720,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fibonacci-program"
-version = "0.1.0"
-dependencies = [
- "alloy-sol-types",
- "fibonacci-lib",
- "sp1-zkvm",
-]
-
-[[package]]
 name = "fibonacci-script"
 version = "0.1.0"
 dependencies = [
@@ -2341,15 +2322,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "icr-program"
-version = "0.1.0"
-dependencies = [
- "alloy-sol-types",
- "fibonacci-lib",
- "sp1-zkvm",
-]
-
-[[package]]
 name = "icu_collections"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2726,15 +2698,6 @@ name = "linux-raw-sys"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd945864f07fe9f5371a27ad7b52a172b4b499999f1d97574c9fa68373937e12"
-
-[[package]]
-name = "liquid-program"
-version = "0.1.0"
-dependencies = [
- "alloy-sol-types",
- "fibonacci-lib",
- "sp1-zkvm",
-]
 
 [[package]]
 name = "litemap"
@@ -3732,17 +3695,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.104",
-]
-
-[[package]]
-name = "putCall-program"
-version = "0.1.0"
-dependencies = [
- "alloy-primitives",
- "alloy-sol-types",
- "fibonacci-lib",
- "sha2",
- "sp1-zkvm",
 ]
 
 [[package]]

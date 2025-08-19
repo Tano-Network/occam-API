@@ -3,26 +3,23 @@ use alloy_sol_types::SolType;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use sp1_sdk::{include_elf, ProverClient, SP1Stdin, setup_logger, HashableKey};
+use sp1_sdk::Prover; // ✅ Needed for .setup() and .prove()
 use std::error::Error;
 use hex;
-use fibonacci_lib::{  PublicValuesDogeTx, DogeTxInput};
+use fibonacci_lib::{PublicValuesDogeTx, DogeTxInput};
 use tokio::task;
 use anyhow::Result;
 use sp1_sdk::SP1ProofMode;
 use anyhow::anyhow;
-use sp1_sdk::Prover;
 use sp1_sdk::network::FulfillmentStrategy;
-
 
 #[allow(unused_variables, unused_imports, dead_code)]
 pub const DOGE_TX_ELF: &[u8] = include_elf!("doge_tx-program");
 
-
-
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DogeTxRequest {
+    owner_address: String,
     tx_hash: String,
     proof_system: String,
 }
@@ -32,21 +29,18 @@ pub struct DogeTxRequest {
 pub struct DogeTxResponse {
     total_doge: u64,
     sender_address: String,
+    owner_address: String,
     vkey: String,
     public_values: String,
     proof: String,
 }
 
+// --- External API structs ---
 #[derive(Debug, Deserialize, Clone)]
 struct BlockstreamUtxo {
     txid: String,
     vout: u32,
     value: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct UtxoValue {
-    value: u64, // in satoshis
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,20 +69,7 @@ struct OutputDetails {
     value: u64,
 }
 
-
-
-
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UserAddress {
-    user_address: String,
-}
-
-
-
-
-
+// --- API Handler ---
 #[post("/prove-doge-transaction")]
 async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder {
     println!("Received Dogecoin transaction proof request: {:?}", req);
@@ -98,7 +79,8 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         Ok(details) => details,
         Err(e) => {
             eprintln!("Failed to fetch transaction details: {:?}", e);
-            return HttpResponse::InternalServerError().body(format!("Transaction fetch failed: {}", e));
+            return HttpResponse::InternalServerError()
+                .body(format!("Transaction fetch failed: {}", e));
         }
     };
 
@@ -114,7 +96,8 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
     }
 
     if total_doge == 0 {
-        return HttpResponse::BadRequest().body("No outputs found for the expected recipient address");
+        return HttpResponse::BadRequest()
+            .body("No outputs found for the expected recipient address");
     }
 
     if let Some(input) = tx_details.inputs.first() {
@@ -127,17 +110,19 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
     let tx_hash = req.tx_hash.clone();
     let proof_system = req.proof_system.clone();
     let sender_address_clone = sender_address.clone();
+    let owner_address_clone = req.owner_address.clone();
 
     // === Step 4: Run proof generation in blocking task ===
     let proof_result = task::spawn_blocking(move || {
         let client = ProverClient::builder().network().build();
         let (pk, vk) = client.setup(DOGE_TX_ELF);
 
-        // === Build stdin ===
         let mut stdin = SP1Stdin::new();
 
-        let txid_decoded = hex::decode(&tx_hash).map_err(|e| anyhow::anyhow!("Invalid tx hash: {}", e))?;
-        let txid_bytes: [u8; 32] = txid_decoded.try_into().map_err(|e| anyhow!("Invalid tx hash length: {:?}", e))?;
+        let txid_decoded =
+            hex::decode(&tx_hash).map_err(|e| anyhow!("Invalid tx hash: {}", e))?;
+        let txid_bytes: [u8; 32] =
+            txid_decoded.try_into().map_err(|e| anyhow!("Invalid tx hash length: {:?}", e))?;
 
         let input = DogeTxInput {
             txid: txid_bytes,
@@ -148,12 +133,11 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
 
         stdin.write(&input);
 
-        // === Prove ===
         let builder = client.prove(&pk, &stdin);
         let builder = match proof_system.as_str() {
             "groth16" => builder.mode(SP1ProofMode::Groth16),
             "plonk" => builder.mode(SP1ProofMode::Plonk),
-            _ => return Err(anyhow::anyhow!("Invalid proof system")),
+            _ => return Err(anyhow!("Invalid proof system")),
         };
 
         let builder = builder.strategy(FulfillmentStrategy::Hosted);
@@ -168,7 +152,8 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         Ok(Ok((proof, vk))) => (proof, vk),
         Ok(Err(e)) => {
             eprintln!("Proof generation failed: {:?}", e);
-            return HttpResponse::InternalServerError().body(format!("Proof generation failed: {}", e));
+            return HttpResponse::InternalServerError()
+                .body(format!("Proof generation failed: {}", e));
         }
         Err(e) => {
             eprintln!("Proof generation task panicked: {:?}", e);
@@ -190,6 +175,7 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
     let response = DogeTxResponse {
         total_doge: public_values.total_doge,
         sender_address,
+        owner_address: owner_address_clone, // ✅ Forwarded from request
         vkey: vk.bytes32(),
         public_values: format!("0x{}", hex::encode(public_bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
@@ -198,15 +184,12 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
     HttpResponse::Ok().json(response)
 }
 
-async fn fetch_utxos(address: &str) -> Result<Vec<BlockstreamUtxo>, Box<dyn Error>> {
-    let url = format!("https://blockstream.info/api/address/{}/utxo", address);
-    let resp = reqwest::get(&url).await?;
-    let utxos: Vec<BlockstreamUtxo> = resp.json().await?;
-    Ok(utxos)
-}
-
+// --- External fetchers ---
 async fn fetch_doge_tx(tx_hash: &str) -> Result<BlockchairTx, Box<dyn Error>> {
-    let url = format!("https://api.blockchair.com/dogecoin/dashboards/transaction/{}", tx_hash);
+    let url = format!(
+        "https://api.blockchair.com/dogecoin/dashboards/transaction/{}",
+        tx_hash
+    );
     let resp = reqwest::get(&url).await?;
     if !resp.status().is_success() {
         return Err(format!("Failed to fetch transaction: {}", resp.status()).into());
@@ -214,33 +197,20 @@ async fn fetch_doge_tx(tx_hash: &str) -> Result<BlockchairTx, Box<dyn Error>> {
     let json: serde_json::Value = resp.json().await?;
     let tx_data = json["data"][tx_hash]
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("Invalid transaction data"))?;
+        .ok_or_else(|| anyhow!("Invalid transaction data"))?;
     let tx: BlockchairTx = serde_json::from_value(serde_json::Value::Object(tx_data.clone()))?;
     Ok(tx)
 }
 
-
-
+// --- Main ---
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     setup_logger();
-    println!("Starting DeFi SP1 proof server on http://localhost:3005");
+    println!("Starting DeFi SP1 proof server on http://localhost:3007");
 
-    HttpServer::new(|| {
-        App::new()
-            .service(prove_doge_transaction)
-    })
-    .workers(1)
-    .bind(("0.0.0.0", 3007))?
-    .run()
-    .await
-
+    HttpServer::new(|| App::new().service(prove_doge_transaction))
+        .workers(1)
+        .bind(("0.0.0.0", 3007))?
+        .run()
+        .await
 }
-
-
-
-
-
-
-
-
