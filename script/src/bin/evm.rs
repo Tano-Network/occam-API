@@ -1,9 +1,8 @@
 use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
-use alloy_sol_types::SolType;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use sp1_sdk::{include_elf, ProverClient, SP1Stdin, setup_logger, HashableKey};
-use sp1_sdk::Prover; // ✅ Needed for .setup() and .prove()
+use sp1_sdk::Prover; // needed for .setup() / .prove()
 use std::error::Error;
 use hex;
 use fibonacci_lib::{PublicValuesDogeTx, DogeTxInput};
@@ -12,11 +11,14 @@ use anyhow::Result;
 use sp1_sdk::SP1ProofMode;
 use anyhow::anyhow;
 use sp1_sdk::network::FulfillmentStrategy;
+use alloy_sol_types::SolType; // ✅ needed for abi_encode / abi_decode
+
 
 #[allow(unused_variables, unused_imports, dead_code)]
 pub const DOGE_TX_ELF: &[u8] = include_elf!("doge_tx-program");
 
-#[derive(Debug, Serialize, Deserialize)]
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DogeTxRequest {
     owner_address: String,
@@ -24,24 +26,34 @@ pub struct DogeTxRequest {
     proof_system: String,
 }
 
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DogeTxResponse {
     total_doge: u64,
     sender_address: String,
-    owner_address: String,
+    owner_address: String, 
+    tx_hash: String,
     vkey: String,
     public_values: String,
     proof: String,
 }
 
-// --- External API structs ---
+
+// ---- External API structs ----
 #[derive(Debug, Deserialize, Clone)]
 struct BlockstreamUtxo {
     txid: String,
     vout: u32,
     value: u64,
 }
+
+
+#[derive(Debug, Deserialize)]
+struct UtxoValue {
+    value: u64,
+}
+
 
 #[derive(Debug, Deserialize)]
 struct BlockchairTx {
@@ -50,6 +62,7 @@ struct BlockchairTx {
     outputs: Vec<OutputDetails>,
 }
 
+
 #[derive(Debug, Deserialize)]
 struct TransactionDetails {
     hash: String,
@@ -57,11 +70,13 @@ struct TransactionDetails {
     output_total: u64,
 }
 
+
 #[derive(Debug, Deserialize)]
 struct InputDetails {
     recipient: String,
     value: u64,
 }
+
 
 #[derive(Debug, Deserialize)]
 struct OutputDetails {
@@ -69,12 +84,14 @@ struct OutputDetails {
     value: u64,
 }
 
-// --- API Handler ---
+
+// ---- Handler ----
 #[post("/prove-doge-transaction")]
 async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder {
     println!("Received Dogecoin transaction proof request: {:?}", req);
 
-    // === Step 1: Fetch transaction details ===
+
+    // 1) Fetch transaction details
     let tx_details = match fetch_doge_tx(&req.tx_hash).await {
         Ok(details) => details,
         Err(e) => {
@@ -84,10 +101,12 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         }
     };
 
-    // === Step 2: Verify recipient address ===
+
+    // 2) Verify recipient address and sum outputs
     const EXPECTED_RECIPIENT: &str = "DHGrS3MYGyKzRVdMNxziTPF7QXvaYoEndA";
     let mut total_doge = 0u64;
     let mut sender_address = String::new();
+
 
     for output in tx_details.outputs.iter() {
         if output.recipient == EXPECTED_RECIPIENT {
@@ -95,10 +114,12 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         }
     }
 
+
     if total_doge == 0 {
         return HttpResponse::BadRequest()
             .body("No outputs found for the expected recipient address");
     }
+
 
     if let Some(input) = tx_details.inputs.first() {
         sender_address = input.recipient.clone();
@@ -106,33 +127,48 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         return HttpResponse::BadRequest().body("No inputs found in the transaction");
     }
 
-    // === Step 3: Clone for move into spawn_blocking ===
+
+    // 3) Clone fields BEFORE moving into blocking closure
     let tx_hash = req.tx_hash.clone();
     let proof_system = req.proof_system.clone();
     let sender_address_clone = sender_address.clone();
-    let owner_address_clone = req.owner_address.clone();
+    let owner_address_plain = req.owner_address.clone();
+    let amount = total_doge;
 
-    // === Step 4: Run proof generation in blocking task ===
+
+    // 4) Prove (blocking)
     let proof_result = task::spawn_blocking(move || {
         let client = ProverClient::builder().network().build();
         let (pk, vk) = client.setup(DOGE_TX_ELF);
 
+
+        // Build stdin
         let mut stdin = SP1Stdin::new();
 
-        let txid_decoded =
-            hex::decode(&tx_hash).map_err(|e| anyhow!("Invalid tx hash: {}", e))?;
-        let txid_bytes: [u8; 32] =
-            txid_decoded.try_into().map_err(|e| anyhow!("Invalid tx hash length: {:?}", e))?;
 
+        // txid as bytes (from hex)
+        let txid_decoded = hex::decode(&tx_hash)
+            .map_err(|e| anyhow!("Invalid tx hash: {}", e))?;
+        let txid_bytes: [u8; 32] = txid_decoded
+            .try_into()
+            .map_err(|e| anyhow!("Invalid tx hash length: {:?}", e))?;
+
+
+        // Prepare circuit input
         let input = DogeTxInput {
             txid: txid_bytes,
             recipient_address: EXPECTED_RECIPIENT.to_string(),
             sender_address: sender_address_clone,
-            amount: total_doge,
+            owner_address: owner_address_plain,
+            tx_hash: tx_hash.clone(),
+            amount,
         };
+
 
         stdin.write(&input);
 
+
+        // Prove
         let builder = client.prove(&pk, &stdin);
         let builder = match proof_system.as_str() {
             "groth16" => builder.mode(SP1ProofMode::Groth16),
@@ -140,16 +176,19 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
             _ => return Err(anyhow!("Invalid proof system")),
         };
 
+
         let builder = builder.strategy(FulfillmentStrategy::Hosted);
 
+
         let proof = builder.run()?;
-        Ok((proof, vk))
+        Ok((proof, vk, tx_hash))
     })
     .await;
 
-    // === Step 5: Handle proof result ===
-    let (proof, vk) = match proof_result {
-        Ok(Ok((proof, vk))) => (proof, vk),
+
+    // 5) Handle proof result
+    let (proof, vk, tx_hash_from_proof) = match proof_result {
+        Ok(Ok((proof, vk, tx_hash))) => (proof, vk, tx_hash),
         Ok(Err(e)) => {
             eprintln!("Proof generation failed: {:?}", e);
             return HttpResponse::InternalServerError()
@@ -161,7 +200,8 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         }
     };
 
-    // === Step 6: Decode public values ===
+
+    // 6) Decode public values
     let public_bytes = proof.public_values.as_slice();
     let public_values = match PublicValuesDogeTx::abi_decode(public_bytes) {
         Ok(val) => val,
@@ -171,20 +211,29 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
         }
     };
 
-    // === Step 7: Build Response ===
+
+    // owner_address in PublicValuesDogeTx is a FixedBytes<32> (hashed owner).
+    let owner_address_hashed_hex =
+        format!("0x{}", hex::encode(public_values.owner_address.as_slice()));
+
+
+    // 7) Build response
     let response = DogeTxResponse {
         total_doge: public_values.total_doge,
         sender_address,
-        owner_address: owner_address_clone, // ✅ Forwarded from request
+        owner_address: owner_address_hashed_hex,
+        tx_hash: tx_hash_from_proof,
         vkey: vk.bytes32(),
         public_values: format!("0x{}", hex::encode(public_bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
     };
 
+
     HttpResponse::Ok().json(response)
 }
 
-// --- External fetchers ---
+
+// ---- External fetchers ----
 async fn fetch_doge_tx(tx_hash: &str) -> Result<BlockchairTx, Box<dyn Error>> {
     let url = format!(
         "https://api.blockchair.com/dogecoin/dashboards/transaction/{}",
@@ -202,15 +251,20 @@ async fn fetch_doge_tx(tx_hash: &str) -> Result<BlockchairTx, Box<dyn Error>> {
     Ok(tx)
 }
 
-// --- Main ---
+
+// ---- Main ----
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     setup_logger();
     println!("Starting DeFi SP1 proof server on http://localhost:3007");
 
-    HttpServer::new(|| App::new().service(prove_doge_transaction))
-        .workers(1)
-        .bind(("0.0.0.0", 3007))?
-        .run()
-        .await
+
+    HttpServer::new(|| {
+        App::new()
+            .service(prove_doge_transaction)
+    })
+    .workers(1)
+    .bind(("0.0.0.0", 3007))?
+    .run()
+    .await
 }
