@@ -256,7 +256,7 @@ async fn fetch_doge_tx(tx_hash: &str) -> Result<BlockchairTx, Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     setup_logger();
-    println!("Starting DeFi SP1 proof server on http://localhost:3007");
+    println!("Starting DeFi SP1 proof server on http://localhost:4000");
 
 
     HttpServer::new(|| {
@@ -264,7 +264,8 @@ async fn main() -> std::io::Result<()> {
             .service(prove_doge_transaction)
     })
     .workers(1)
-    .bind(("0.0.0.0", 3007))?
+    .bind(("0.0.0.0", 4000))?
     .run()
     .await
 }
+
