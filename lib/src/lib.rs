@@ -7,7 +7,7 @@ sol! {
     struct PublicValuesDogeTx {
         uint64 total_doge; // Dogecoins in satoshis
         bytes32 sender_address_hash; // SHA256 of sender address
-        bytes32 owner_address; // SHA256 of owner address
+        address owner_address; // SHA256 of owner address
         bytes32 tx_hash; // SHA256 of transaction hash
         
     }
