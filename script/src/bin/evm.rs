@@ -229,14 +229,14 @@ async fn fetch_doge_tx(tx_hash: &str) -> Result<BlockchairTx, Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     setup_logger();
-    println!("Starting DeFi SP1 proof server on http://localhost:4000");
+    println!("Starting DeFi SP1 proof server on http://localhost:4001");
 
     HttpServer::new(|| {
         App::new()
             .service(prove_doge_transaction)
     })
     .workers(1)
-    .bind(("0.0.0.0", 4000))?
+    .bind(("0.0.0.0", 4001))?
     .run()
     .await
 }
