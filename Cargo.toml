@@ -3,7 +3,8 @@ members = [
     "lib",
     "script",
     "doge_tx",
-    
+    "Xrp_tx",
+    "Xrp_balance"
     ]
 resolver = "2"
 

@@ -3,6 +3,30 @@
 version = 4
 
 [[package]]
+name = "Xrp_balance-program"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "fibonacci-lib",
+ "hex",
+ "sha2",
+ "sp1-zkvm",
+]
+
+[[package]]
+name = "Xrp_tx-program"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "fibonacci-lib",
+ "hex",
+ "sha2",
+ "sp1-zkvm",
+]
+
+[[package]]
 name = "actix-codec"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

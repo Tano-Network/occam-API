@@ -11,6 +11,23 @@ sol! {
         bytes32 tx_hash; // SHA256 of transaction hash
         
     }
+
+    struct PublicValuesXrpTx{
+        uint64 total_xrp; // XRP in drops
+        bytes32 sender_address_hash; // SHA256 of sender address
+        string owner_address; // SHA256 of owner address
+        bytes32 tx_hash; // SHA256 of transaction hash
+    }
+
+
+    struct PublicValuesXrpBalance{
+        uint64 total_xrp; // XRP in drops
+        string address; // SHA256 of address
+    }
+
+
+
+
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -47,7 +64,22 @@ pub struct DogeTxInput {
     pub tx_hash: String,
     pub amount: u64, // Dogecoins in satoshis
 }
+#[derive(Serialize, Deserialize, Clone)]
+pub struct XrpTxInput {
+    pub txid: [u8; 32],
+    pub recipient_address: String,
+    pub sender_address: String,
+    pub owner_address: String,
+    pub tx_hash: String,
+    pub amount: u64, // XRP in drops
+}
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct XrpBalanceInput {
+    pub address: String,
+    
+    pub amount: u64, // XRP in drops
+}
 fn serialize_vec_33<S>(vec: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
