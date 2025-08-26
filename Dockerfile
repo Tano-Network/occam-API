@@ -1,17 +1,21 @@
 # ---------- Build Stage ----------
 FROM rust:1.80 as builder
 
-# Set workdir as per your server structure
+# Install succinct toolchain for SP1 SDK
+RUN rustup install succinct && \
+    rustup component add rust-src --toolchain succinct && \
+    rustup default succinct
+
 WORKDIR /WorkingTano/occam-API
 
-# Copy manifest files first for caching
+# Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
 # Copy entire project
 COPY . .
 
-# Build the binary (release mode)
-RUN cargo build --release --bin evm
+# Build binary using succinct toolchain
+RUN RUSTUP_TOOLCHAIN=succinct cargo build --release --bin evm
 
 
 # ---------- Runtime Stage ----------
@@ -22,17 +26,16 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Match working directory with your setup
 WORKDIR /WorkingTano/occam-API
 
-# Copy compiled binary from builder
+# Copy binary from builder
 COPY --from=builder /WorkingTano/occam-API/target/release/evm ./evm
 
-# Set environment variables (can override at runtime)
+# Default env (can override at runtime)
 ENV SP1_PROVER=network
 
-# Expose the API port
+# Expose API port
 EXPOSE 4000
 
-# Run the server
+# Start API
 CMD ["./evm"]
