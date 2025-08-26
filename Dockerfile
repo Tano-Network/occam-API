@@ -1,7 +1,6 @@
-# ---------- Build Stage ----------
-FROM rust:1.80 as builder
+FROM rust:1.80
 
-# Install required build dependencies for SP1 + actix-web + reqwest
+# Install required system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     clang \
@@ -12,33 +11,14 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /WorkingTano/occam-API
 
-# Copy manifests first
+# Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Copy the rest of the project
+# Copy full source code
 COPY . .
 
-# Build binary in release mode
-RUN cargo build --release --bin evm
-
-
-# ---------- Runtime Stage ----------
-FROM debian:bullseye-slim AS runtime
-
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /WorkingTano/occam-API
-
-# Copy binary from builder
-COPY --from=builder /WorkingTano/occam-API/target/release/evm ./evm
-
-# Set default env (can override at runtime)
-ENV SP1_PROVER=network
-
-# Expose API port
+# Expose port
 EXPOSE 4000
 
-# Start API
-CMD ["./evm"]
+# Hardcoded env + command
+CMD SP1_PROVER=network NETWORK_PRIVATE_KEY=9d2fe65604d872ea2b45f7dd48c49d4a83984f11e2f179275a65b98fe84d4899 cargo run --release --bin evm
