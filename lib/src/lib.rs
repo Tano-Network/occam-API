@@ -15,7 +15,7 @@ sol! {
     struct PublicValuesXrpTx{
         uint64 total_xrp; // XRP in drops
         bytes32 sender_address_hash; // SHA256 of sender address
-        string owner_address; // SHA256 of owner address
+        address owner_address; // SHA256 of owner address
         bytes32 tx_hash; // SHA256 of transaction hash
     }
 
