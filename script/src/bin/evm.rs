@@ -300,7 +300,7 @@ async fn prove_xrp_transaction(req: web::Json<XrpTxRequest>) -> impl Responder {
     );
 
     // 3) Verify recipient address and extract amount
-    const EXPECTED_RECIPIENT: &str = "rLAc6d8QtzMMhp1ziGvBGzLk81gDfM25du";
+    const EXPECTED_RECIPIENT: &str = "rpJRDWw1M9jm7NRgrrSvHLJFWA7CaeaWuw";
     println!("🎯 Expected recipient: {}", EXPECTED_RECIPIENT);
 
     let sender_address = match tx_json.get("Account").and_then(|v| v.as_str()) {
@@ -639,15 +639,15 @@ async fn fetch_doge_tx(tx_hash: &str) -> Result<BlockchairTx, Box<dyn Error>> {
 }
 //This function fetches XRP transaction details from the XRP Ledger using its public API.
 async fn fetch_xrp_tx(tx_hash: &str) -> Result<Value, Box<dyn Error>> {
-    // Tatum XRP Testnet API endpoint
+    // Tatum XRP Mainnet API endpoint
     let url = format!("https://api.tatum.io/v3/xrp/transaction/{}", tx_hash);
     
-    println!("🔍 Querying Tatum XRP Testnet API: {}", url);
+    println!("🔍 Querying Tatum XRP Mainnet API: {}", url);
     
     let client = reqwest::Client::new();
     let resp = client
         .get(&url)
-        .header("x-api-key", "t-6863d36d6ce4fd5a9dff5947-0eea1990a01e4081a4b5c2e6") // Your API key
+        .header("x-api-key", "t-68b034bfb63d86a61dd9f14e-1fd455540285454a99724f2b") // Your API key
         .header("User-Agent", "Mozilla/5.0")
         .send()
         .await?;
@@ -665,15 +665,13 @@ async fn fetch_xrp_tx(tx_hash: &str) -> Result<Value, Box<dyn Error>> {
     Ok(json)
 }
 
-
-async  fn xrp_balance_fetch(address: &str) -> Result<u64, Box<dyn Error>> {
-
+async fn xrp_balance_fetch(address: &str) -> Result<u64, Box<dyn Error>> {
     let url = format!("https://api.tatum.io/v3/xrp/account/{}/balance", address);
     
     let client = reqwest::Client::new();
-     let response = client
+    let response = client
         .get(&url)
-        .header("x-api-key", "t-6863d36d6ce4fd5a9dff5947-0eea1990a01e4081a4b5c2e6") // Your API key
+        .header("x-api-key", "t-68b034bfb63d86a61dd9f14e-1fd455540285454a99724f2b") // Your API key
         .header("User-Agent", "Mozilla/5.0")
         .send()
         .await?;

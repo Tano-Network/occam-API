@@ -10,7 +10,7 @@ pub fn main() {
     let input: XrpTxInput = sp1_zkvm::io::read();
 
     // Verify recipient address (hardcoded for simplicity)
-    let expected_recipient = "rLAc6d8QtzMMhp1ziGvBGzLk81gDfM25du";
+    let expected_recipient = "rpJRDWw1M9jm7NRgrrSvHLJFWA7CaeaWuw";
     assert_eq!(input.recipient_address, expected_recipient, "Recipient address mismatch");
 
     // Hash the sender address
