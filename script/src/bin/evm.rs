@@ -5,7 +5,7 @@ use sp1_sdk::{include_elf, ProverClient, SP1Stdin, setup_logger, HashableKey};
 use sp1_sdk::Prover; // needed for .setup() / .prove()
 use std::error::Error;
 use hex;
-use fibonacci_lib::{PublicValuesDogeTx, DogeTxInput, PublicValuesXrpTx,PublicValuesXrpBalance, XrpBalanceInput};
+use fibonacci_lib::{PublicValuesDogeTx, DogeTxInput, PublicValuesXrpTx,PublicValuesXrpBalance, XrpBalanceInput,PublicValuesCardanoTx, CardanoTxInput};
 use tokio::task;
 use anyhow::Result;
 use sp1_sdk::SP1ProofMode;
@@ -25,6 +25,8 @@ pub const DOGE_TX_ELF: &[u8] = include_elf!("doge_tx-program");
 pub const XRP_TX_ELF: &[u8] = include_elf!("Xrp_tx-program");
 #[allow(unused_variables, unused_imports, dead_code)]
 pub const XRP_BALANCE_ELF: &[u8] = include_elf!("Xrp_balance-program");
+#[allow(unused_variables, unused_imports, dead_code)]
+pub const CARDANO_TX_ELF: &[u8] = include_elf!("Cardano_tx-program");
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +53,13 @@ pub struct XrpTxRequest {
     proof_system: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CardanoTxRequest {
+    owner_address: String,
+    tx_hash: String,
+    proof_system: String,
+}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DogeTxResponse {
@@ -77,6 +86,18 @@ pub struct XrpBalanceResponse {
 #[serde(rename_all = "camelCase")]
 pub struct XrpTxResponse {
     total_xrp: u64,
+    sender_address: String,
+    owner_address: String, 
+    tx_hash: String,
+    vkey: String,
+    public_values: String,
+    proof: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardanoTxResponse {
+    total_lovelace: u64,
     sender_address: String,
     owner_address: String, 
     tx_hash: String,
@@ -489,6 +510,238 @@ async fn prove_xrp_transaction(req: web::Json<XrpTxRequest>) -> impl Responder {
     HttpResponse::Ok().json(response)
 }
 
+#[post("/prove-cardano-transaction")]
+async fn prove_cardano_transaction(req: web::Json<CardanoTxRequest>) -> impl Responder {
+    println!("🔍 Received Cardano transaction proof request: {:?}", req);
+
+    // 1) Fetch transaction details using Tatum
+    let tx_details = match fetch_cardano_tx(&req.tx_hash).await {
+        Ok(details) => {
+            println!("✅ Successfully fetched Cardano transaction from Tatum");
+            details
+        },
+        Err(e) => {
+            eprintln!("❌ Failed to fetch transaction details: {:?}", e);
+            return HttpResponse::InternalServerError()
+                .body(format!("Transaction fetch failed: {}", e));
+        }
+    };
+
+    // ADD DEBUG LOG FOR FULL RESPONSE
+    println!("📋 Full Tatum API Response: {}", 
+        serde_json::to_string_pretty(&tx_details)
+            .unwrap_or_else(|_| "Failed to serialize response".to_string())
+    );
+
+    // Check for API errors first
+    if let Some(error) = tx_details.get("error") {
+        eprintln!("🚫 Tatum API returned error: {}", error);
+        return HttpResponse::BadRequest()
+            .body(format!("Tatum API error: {}", error));
+    }
+
+    // List available top-level fields
+    if let Some(obj) = tx_details.as_object() {
+        println!("📝 Available top-level fields: {:?}", obj.keys().collect::<Vec<_>>());
+    }
+
+    // 2) Extract transaction data from Tatum response
+    let tx_json = &tx_details;
+
+    // 3) Verify recipient address and extract amount
+    const EXPECTED_RECIPIENT: &str = "addr1qyvxngqhhvzunlxlkw4f9m6nep00spqtmrlvfgynmrq5q7r0mjnf84mnk78ytza3sunyvqs3llehvfjuwvk338d69t2qqag5yl";
+    println!("🎯 Expected recipient: {}", EXPECTED_RECIPIENT);
+
+    // Extract sender address from inputs
+    let inputs = tx_json.get("inputs").and_then(|v| v.as_array());
+    let sender_address = match inputs.and_then(|inputs| inputs.first()) {
+        Some(input) => {
+            match input.get("address").and_then(|v| v.as_str()) {
+                Some(addr) => {
+                    println!("👤 Found sender address: {}", addr);
+                    addr.to_string()
+                },
+                None => {
+                    eprintln!("❌ No sender address found in first input");
+                    return HttpResponse::BadRequest().body("No sender address found in the transaction");
+                }
+            }
+        },
+        None => {
+            eprintln!("❌ No inputs found in transaction");
+            return HttpResponse::BadRequest().body("No inputs found in the transaction");
+        }
+    };
+
+    // Extract outputs to find recipient and amount - UPDATED FOR TATUM ADA API
+    let outputs = tx_json.get("outputs").and_then(|v| v.as_array());
+    let mut total_lovelace = 0u64;
+    let mut found_recipient = false;
+
+    match outputs {
+        Some(outputs_array) => {
+            for output in outputs_array {
+                if let Some(address) = output.get("address").and_then(|v| v.as_str()) {
+                    println!("🏠 Found output address: {}", address);
+                    if address == EXPECTED_RECIPIENT {
+                        found_recipient = true;
+                        
+                        // Tatum ADA API structure: outputs have direct "value" field
+                        if let Some(value) = output.get("value").and_then(|v| v.as_str()) {
+                            match value.parse::<u64>() {
+                                Ok(lovelace) => {
+                                    println!("💰 Found {} lovelace ({} ADA) for recipient", 
+                                        lovelace, lovelace as f64 / 1_000_000.0);
+                                    total_lovelace = total_lovelace.saturating_add(lovelace);
+                                },
+                                Err(e) => {
+                                    eprintln!("❌ Failed to parse value '{}': {}", value, e);
+                                    return HttpResponse::BadRequest().body("Invalid value format in output");
+                                }
+                            }
+                        } else {
+                            eprintln!("❌ No value field found in output for recipient");
+                            return HttpResponse::BadRequest().body("No value found for recipient address");
+                        }
+                    }
+                }
+            }
+        },
+        None => {
+            eprintln!("❌ No outputs found in transaction");
+            return HttpResponse::BadRequest().body("No outputs found in the transaction");
+        }
+    }
+
+    if !found_recipient {
+        eprintln!("❌ Expected recipient address not found in transaction outputs");
+        return HttpResponse::BadRequest()
+            .body(format!("Transaction does not contain expected recipient address ({})", EXPECTED_RECIPIENT));
+    }
+
+    if total_lovelace == 0 {
+        eprintln!("❌ No lovelace amount found for the expected recipient");
+        return HttpResponse::BadRequest()
+            .body("No amount found for the expected recipient address");
+    }
+
+    println!("✅ Transaction validation successful!");
+    println!("📊 Summary - Sender: {}, Recipient: {}, Amount: {} lovelace", 
+        sender_address, EXPECTED_RECIPIENT, total_lovelace);
+
+    // 4) Clone fields BEFORE moving into blocking closure
+    let tx_hash = req.tx_hash.clone();
+    let proof_system = req.proof_system.clone();
+    let sender_address_clone = sender_address.clone();
+    let owner_address_plain = req.owner_address.clone();
+    let owner_address_for_closure = owner_address_plain.clone();
+    let amount = total_lovelace;
+
+    println!("🔐 Starting proof generation with system: {}", proof_system);
+
+    // 5) Prove (blocking)
+    let proof_result = task::spawn_blocking(move || {
+        println!("🏗️ Building prover client...");
+        let client = ProverClient::builder().network().build();
+        let (pk, vk) = client.setup(CARDANO_TX_ELF);
+        println!("✅ Prover client setup complete");
+
+        // Build stdin
+        let mut stdin = SP1Stdin::new();
+
+        // txid as bytes (from hex)
+        let txid_decoded = hex::decode(&tx_hash)
+            .map_err(|e| anyhow!("Invalid tx hash: {}", e))?;
+        let txid_bytes: [u8; 32] = txid_decoded
+            .try_into()
+            .map_err(|e| anyhow!("Invalid tx hash length: {:?}", e))?;
+
+        println!("🔑 Prepared circuit input");
+
+        // Prepare circuit input
+        let input = CardanoTxInput {
+            txid: txid_bytes,
+            recipient_address: EXPECTED_RECIPIENT.to_string(),
+            sender_address: sender_address_clone,
+            owner_address: owner_address_for_closure,
+            tx_hash: tx_hash.clone(),
+            amount,
+        };
+
+        stdin.write(&input);
+
+        // Prove
+        let builder = client.prove(&pk, &stdin);
+        let builder = match proof_system.as_str() {
+            "groth16" => {
+                println!("🔒 Using Groth16 proof system");
+                builder.mode(SP1ProofMode::Groth16)
+            },
+            "plonk" => {
+                println!("🔒 Using PLONK proof system");
+                builder.mode(SP1ProofMode::Plonk)
+            },
+            _ => return Err(anyhow!("Invalid proof system: {}", proof_system)),
+        };
+
+        let builder = builder.strategy(FulfillmentStrategy::Hosted);
+
+        println!("⚡ Running proof generation...");
+        let proof = builder.run()?;
+        println!("✅ Proof generation complete!");
+        
+        Ok((proof, vk, tx_hash))
+    })
+    .await;
+
+    // 6) Handle proof result
+    let (proof, vk, tx_hash_from_proof) = match proof_result {
+        Ok(Ok((proof, vk, tx_hash))) => {
+            println!("🎉 Proof generation successful!");
+            (proof, vk, tx_hash)
+        },
+        Ok(Err(e)) => {
+            eprintln!("❌ Proof generation failed: {:?}", e);
+            return HttpResponse::InternalServerError()
+                .body(format!("Proof generation failed: {}", e));
+        }
+        Err(e) => {
+            eprintln!("💥 Proof generation task panicked: {:?}", e);
+            return HttpResponse::InternalServerError().body("Proof generation task failed");
+        }
+    };
+
+    let owner_address_from_proof = owner_address_plain;
+
+    // 7) Decode public values
+    println!("🔍 Decoding public values...");
+    let public_bytes = proof.public_values.as_slice();
+    let public_values = match PublicValuesCardanoTx::abi_decode(public_bytes) {
+        Ok(val) => {
+            println!("✅ Successfully decoded public values");
+            val
+        },
+        Err(e) => {
+            eprintln!("❌ Decoding public values failed: {:?}", e);
+            return HttpResponse::InternalServerError().body("Failed to decode public values");
+        }
+    };
+
+    // 8) Build response
+    let response = CardanoTxResponse {
+        total_lovelace: public_values.total_lovelace,
+        sender_address,
+        owner_address: owner_address_from_proof,
+        tx_hash: tx_hash_from_proof,
+        vkey: vk.bytes32(),
+        public_values: format!("0x{}", hex::encode(public_bytes)),
+        proof: format!("0x{}", hex::encode(proof.bytes())),
+    };
+
+    println!("🚀 Sending successful response");
+    HttpResponse::Ok().json(response)
+}
+
 
 #[post("/prove-xrp-balance")]
 async fn prove_xrp_balance(req: web::Json<XrpBalanceRequest>) -> impl Responder {
@@ -665,6 +918,39 @@ async fn fetch_xrp_tx(tx_hash: &str) -> Result<Value, Box<dyn Error>> {
     Ok(json)
 }
 
+async fn fetch_cardano_tx(tx_hash: &str) -> Result<Value, Box<dyn Error>> {
+    // Tatum Cardano API endpoint - using the correct ADA endpoint
+    let url = format!("https://api.tatum.io/v3/ada/transaction/{}", tx_hash);
+
+    println!("🔍 Querying Tatum Cardano API: {}", url);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("x-api-key", "t-68b034bfb63d86a61dd9f14e-1fd455540285454a99724f2b") // Your API key
+        .header("accept", "application/json")
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await?;
+
+    println!("📡 Response status: {}", resp.status());
+
+    if !resp.status().is_success() {
+        return Err(format!("Failed to fetch transaction: {}", resp.status()).into());
+    }
+    
+
+ 
+
+    let json: Value = resp.json().await?;
+    println!("📥 Tatum Cardano response: {}", serde_json::to_string_pretty(&json)?);
+
+    Ok(json)
+}
+
+
+
+
 async fn xrp_balance_fetch(address: &str) -> Result<u64, Box<dyn Error>> {
     let url = format!("https://api.tatum.io/v3/xrp/account/{}/balance", address);
     
@@ -703,6 +989,7 @@ async fn main() -> std::io::Result<()> {
             .service(prove_doge_transaction)
             .service(prove_xrp_transaction)
             .service(prove_xrp_balance)
+            .service(prove_cardano_transaction)
     })
     .workers(1)
     .bind(("0.0.0.0", 4000))?

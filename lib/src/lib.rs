@@ -26,6 +26,14 @@ sol! {
     }
 
 
+    struct PublicValuesCardanoTx {
+        uint64 total_lovelace; // Lovelace
+        bytes32 sender_address_hash; // SHA256 of sender address
+        address owner_address; // SHA256 of owner address
+        bytes32 tx_hash; // SHA256 of transaction hash
+    }
+
+
 
 
 }
@@ -72,6 +80,17 @@ pub struct XrpTxInput {
     pub owner_address: String,
     pub tx_hash: String,
     pub amount: u64, // XRP in drops
+}
+
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CardanoTxInput {
+    pub txid: [u8; 32],
+    pub recipient_address: String,
+    pub sender_address: String,
+    pub owner_address: String,
+    pub tx_hash: String,
+    pub amount: u64, // Lovelace
 }
 
 #[derive(Serialize, Deserialize, Clone)]

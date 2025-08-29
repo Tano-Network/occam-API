@@ -4,7 +4,8 @@ members = [
     "script",
     "doge_tx",
     "Xrp_tx",
-    "Xrp_balance"
+    "Xrp_balance",
+    "Cardano_tx"
     ]
 resolver = "2"
 
