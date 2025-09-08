@@ -5,7 +5,7 @@ use sp1_sdk::{include_elf, ProverClient, SP1Stdin, setup_logger, HashableKey};
 use sp1_sdk::Prover; // needed for .setup() / .prove()
 use std::error::Error;
 use hex;
-use fibonacci_lib::{PublicValuesDogeTx, DogeTxInput, PublicValuesXrpTx,PublicValuesXrpBalance, XrpBalanceInput,PublicValuesCardanoTx, CardanoTxInput};
+use fibonacci_lib::{PublicValuesDogeTx, DogeTxInput, PublicValuesXrpTx,PublicValuesXrpBalance, XrpBalanceInput,PublicValuesCardanoTx, CardanoTxInput,PublicValuesLiteCoinHoldings, LiteCoinHoldingsInput,PublicValuesBitcoinCashHoldings, BitcoinCashHoldingsInput};
 use tokio::task;
 use anyhow::Result;
 use sp1_sdk::SP1ProofMode;
@@ -27,6 +27,11 @@ pub const XRP_TX_ELF: &[u8] = include_elf!("Xrp_tx-program");
 pub const XRP_BALANCE_ELF: &[u8] = include_elf!("Xrp_balance-program");
 #[allow(unused_variables, unused_imports, dead_code)]
 pub const CARDANO_TX_ELF: &[u8] = include_elf!("Cardano_tx-program");
+
+#[allow(unused_variables, unused_imports, dead_code)]
+pub const LITECOIN_TX_ELF: &[u8] = include_elf!("LiteCoin_tx-program");
+#[allow(unused_variables, unused_imports, dead_code)]
+pub const BITCOINCASH_TX_ELF: &[u8] = include_elf!("BitcoinCash_tx-program");
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +65,47 @@ pub struct CardanoTxRequest {
     tx_hash: String,
     proof_system: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LiteCoinTxRequest {
+    owner_address: String,
+    tx_hash: String,
+    proof_system: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BitcoinCashTxRequest {
+    owner_address: String,
+    tx_hash: String,
+    proof_system: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiteCoinTxResponse {
+    total_litecoin: u64,
+    sender_address: String,
+    owner_address: String, 
+    tx_hash: String,
+    vkey: String,
+    public_values: String,
+    proof: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitcoinCashTxResponse {
+    total_bitcoin_cash: u64,
+    sender_address: String,
+    owner_address: String, 
+    tx_hash: String,
+    vkey: String,
+    public_values: String,
+    proof: String,
+}
+
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DogeTxResponse {
@@ -869,6 +915,497 @@ async fn prove_xrp_balance(req: web::Json<XrpBalanceRequest>) -> impl Responder 
     HttpResponse::Ok().json(response)
 }
 
+#[post("/prove-litecoin-transaction")]
+async fn prove_litecoin_transaction(req: web::Json<LiteCoinTxRequest>) -> impl Responder {
+    println!("🔍 Received Litecoin transaction proof request: {:?}", req);
+
+    // 1) Fetch transaction details using Tatum
+    let tx_details = match fetch_litecoin_tx(&req.tx_hash).await {
+        Ok(details) => {
+            println!("✅ Successfully fetched Litecoin transaction from Tatum");
+            details
+        },
+        Err(e) => {
+            eprintln!("❌ Failed to fetch transaction details: {:?}", e);
+            return HttpResponse::InternalServerError()
+                .body(format!("Transaction fetch failed: {}", e));
+        }
+    };
+
+    // ADD DEBUG LOG FOR FULL RESPONSE
+    println!("📋 Full Tatum API Response: {}", 
+        serde_json::to_string_pretty(&tx_details)
+            .unwrap_or_else(|_| "Failed to serialize response".to_string())
+    );
+
+    // Check for API errors first
+    if let Some(error) = tx_details.get("error") {
+        eprintln!("🚫 Tatum API returned error: {}", error);
+        return HttpResponse::BadRequest()
+            .body(format!("Tatum API error: {}", error));
+    }
+
+    // List available top-level fields
+    if let Some(obj) = tx_details.as_object() {
+        println!("📝 Available top-level fields: {:?}", obj.keys().collect::<Vec<_>>());
+    }
+
+    // 2) Extract transaction data from Tatum response
+    let tx_json = &tx_details;
+
+    // 3) Verify recipient address and extract amount
+    const EXPECTED_RECIPIENT: &str = "ltc1qqhvj3grzewmqjp3sehjqjacg2pwkukxmqp84sr";
+    println!("🎯 Expected recipient: {}", EXPECTED_RECIPIENT);
+
+    // Extract sender address from inputs (Tatum Litecoin structure)
+    let inputs = tx_json.get("inputs").and_then(|v| v.as_array());
+    let sender_address = match inputs.and_then(|inputs| inputs.first()) {
+        Some(input) => {
+            // In Tatum Litecoin API, sender address is in coin.address field
+            match input.get("coin").and_then(|coin| coin.get("address")).and_then(|v| v.as_str()) {
+                Some(addr) => {
+                    println!("👤 Found sender address: {}", addr);
+                    addr.to_string()
+                },
+                None => {
+                    eprintln!("❌ No sender address found in input coin field");
+                    return HttpResponse::BadRequest().body("No sender address found in the transaction");
+                }
+            }
+        },
+        None => {
+            eprintln!("❌ No inputs found in transaction");
+            return HttpResponse::BadRequest().body("No inputs found in the transaction");
+        }
+    };
+
+    // Extract outputs to find recipient and amount (Tatum Litecoin structure)
+    let outputs = tx_json.get("outputs").and_then(|v| v.as_array());
+    let mut total_litecoin = 0u64;
+    let mut found_recipient = false;
+
+    match outputs {
+        Some(outputs_array) => {
+            for output in outputs_array {
+                if let Some(address) = output.get("address").and_then(|v| v.as_str()) {
+                    println!("🏠 Found output address: {}", address);
+                    if address == EXPECTED_RECIPIENT {
+                        found_recipient = true;
+                        
+                        // In Tatum Litecoin API, value is a string in LTC format (e.g., "0.07467455")
+                        if let Some(value) = output.get("value").and_then(|v| v.as_str()) {
+                            match value.parse::<f64>() {
+                                Ok(ltc_amount) => {
+                                    // Convert LTC to satoshi (1 LTC = 100,000,000 satoshi)
+                                    let satoshi = (ltc_amount * 100_000_000.0) as u64;
+                                    println!("💰 Found {} LTC ({} satoshi) for recipient", 
+                                        ltc_amount, satoshi);
+                                    total_litecoin = total_litecoin.saturating_add(satoshi);
+                                },
+                                Err(e) => {
+                                    eprintln!("❌ Failed to parse LTC value '{}': {}", value, e);
+                                    return HttpResponse::BadRequest().body("Invalid LTC value format in output");
+                                }
+                            }
+                        } else {
+                            eprintln!("❌ No value field found in output for recipient");
+                            return HttpResponse::BadRequest().body("No value found for recipient address");
+                        }
+                    }
+                }
+            }
+        },
+        None => {
+            eprintln!("❌ No outputs found in transaction");
+            return HttpResponse::BadRequest().body("No outputs found in the transaction");
+        }
+    }
+
+    if !found_recipient {
+        eprintln!("❌ Expected recipient address not found in transaction outputs");
+        return HttpResponse::BadRequest()
+            .body(format!("Transaction does not contain expected recipient address ({})", EXPECTED_RECIPIENT));
+    }
+
+    if total_litecoin == 0 {
+        eprintln!("❌ No litecoin amount found for the expected recipient");
+        return HttpResponse::BadRequest()
+            .body("No amount found for the expected recipient address");
+    }
+
+    println!("✅ Transaction validation successful!");
+    println!("📊 Summary - Sender: {}, Recipient: {}, Amount: {} satoshi ({} LTC)", 
+        sender_address, EXPECTED_RECIPIENT, total_litecoin, total_litecoin as f64 / 100_000_000.0);
+
+    // 4) Clone fields BEFORE moving into blocking closure
+    let tx_hash = req.tx_hash.clone();
+    let proof_system = req.proof_system.clone();
+    let sender_address_clone = sender_address.clone();
+    let owner_address_plain = req.owner_address.clone();
+    let owner_address_for_closure = owner_address_plain.clone();
+    let amount = total_litecoin;
+
+    println!("🔐 Starting proof generation with system: {}", proof_system);
+
+    // 5) Prove (blocking)
+    let proof_result = task::spawn_blocking(move || {
+        println!("🏗️ Building prover client...");
+        let client = ProverClient::builder().network().build();
+        let (pk, vk) = client.setup(LITECOIN_TX_ELF);
+        println!("✅ Prover client setup complete");
+
+        // Build stdin
+        let mut stdin = SP1Stdin::new();
+
+        // txid as bytes (from hex)
+        let txid_decoded = hex::decode(&tx_hash)
+            .map_err(|e| anyhow!("Invalid tx hash: {}", e))?;
+        let txid_bytes: [u8; 32] = txid_decoded
+            .try_into()
+            .map_err(|e| anyhow!("Invalid tx hash length: {:?}", e))?;
+
+        println!("🔑 Prepared circuit input");
+
+        // Prepare circuit input
+        let input = LiteCoinHoldingsInput {
+            txid: txid_bytes,
+            recipient_address: EXPECTED_RECIPIENT.to_string(),
+            sender_address: sender_address_clone,
+            owner_address: owner_address_for_closure,
+            tx_hash: tx_hash.clone(),
+            amount,
+        };
+
+        stdin.write(&input);
+
+        // Prove
+        let builder = client.prove(&pk, &stdin);
+        let builder = match proof_system.as_str() {
+            "groth16" => {
+                println!("🔒 Using Groth16 proof system");
+                builder.mode(SP1ProofMode::Groth16)
+            },
+            "plonk" => {
+                println!("🔒 Using PLONK proof system");
+                builder.mode(SP1ProofMode::Plonk)
+            },
+            _ => return Err(anyhow!("Invalid proof system: {}", proof_system)),
+        };
+
+        let builder = builder.strategy(FulfillmentStrategy::Hosted);
+
+        println!("⚡ Running proof generation...");
+        let proof = builder.run()?;
+        println!("✅ Proof generation complete!");
+        
+        Ok((proof, vk, tx_hash))
+    })
+    .await;
+
+    // 6) Handle proof result
+    let (proof, vk, tx_hash_from_proof) = match proof_result {
+        Ok(Ok((proof, vk, tx_hash))) => {
+            println!("🎉 Proof generation successful!");
+            (proof, vk, tx_hash)
+        },
+        Ok(Err(e)) => {
+            eprintln!("❌ Proof generation failed: {:?}", e);
+            return HttpResponse::InternalServerError()
+                .body(format!("Proof generation failed: {}", e));
+        }
+        Err(e) => {
+            eprintln!("💥 Proof generation task panicked: {:?}", e);
+            return HttpResponse::InternalServerError().body("Proof generation task failed");
+        }
+    };
+
+    let owner_address_from_proof = owner_address_plain;
+
+    // 7) Decode public values
+    println!("🔍 Decoding public values...");
+    let public_bytes = proof.public_values.as_slice();
+    let public_values = match PublicValuesLiteCoinHoldings::abi_decode(public_bytes) {
+        Ok(val) => {
+            println!("✅ Successfully decoded public values");
+            val
+        },
+        Err(e) => {
+            eprintln!("❌ Decoding public values failed: {:?}", e);
+            return HttpResponse::InternalServerError().body("Failed to decode public values");
+        }
+    };
+
+    // 8) Build response
+    let response = LiteCoinTxResponse {
+        total_litecoin: public_values.total_litecoin,
+        sender_address,
+        owner_address: owner_address_from_proof,
+        tx_hash: tx_hash_from_proof,
+        vkey: vk.bytes32(),
+        public_values: format!("0x{}", hex::encode(public_bytes)),
+        proof: format!("0x{}", hex::encode(proof.bytes())),
+    };
+
+    println!("🚀 Sending successful response");
+    HttpResponse::Ok().json(response)
+}
+
+
+#[post("/prove-bitcoincash-transaction")]
+async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> impl Responder {
+    println!("🔍 Received Bitcoin Cash transaction proof request: {:?}", req);
+
+    // 1) Fetch transaction details using Tatum
+    let tx_details = match fetch_bch_tx(&req.tx_hash).await {
+        Ok(details) => {
+            println!("✅ Successfully fetched Bitcoin Cash transaction from Tatum");
+            details
+        },
+        Err(e) => {
+            eprintln!("❌ Failed to fetch transaction details: {:?}", e);
+            return HttpResponse::InternalServerError()
+                .body(format!("Transaction fetch failed: {}", e));
+        }
+    };
+
+    // ADD DEBUG LOG FOR FULL RESPONSE
+    println!("📋 Full Tatum API Response: {}", 
+        serde_json::to_string_pretty(&tx_details)
+            .unwrap_or_else(|_| "Failed to serialize response".to_string())
+    );
+
+    // Check for API errors first
+    if let Some(error) = tx_details.get("error") {
+        eprintln!("🚫 Tatum API returned error: {}", error);
+        return HttpResponse::BadRequest()
+            .body(format!("Tatum API error: {}", error));
+    }
+
+    // List available top-level fields
+    if let Some(obj) = tx_details.as_object() {
+        println!("📝 Available top-level fields: {:?}", obj.keys().collect::<Vec<_>>());
+    }
+
+    // 2) Extract transaction data from Tatum response
+    let tx_json = &tx_details;
+
+    // 3) Verify recipient address and extract amount
+    const EXPECTED_RECIPIENT: &str = "qqv2smfg2yd2u3e3dt0ype63cw06lqcl3c0jlhw8v3";
+    println!("🎯 Expected recipient: {}", EXPECTED_RECIPIENT);
+
+    // Extract sender address from inputs (Bitcoin Cash uses "vin" array)
+    let inputs = tx_json.get("vin").and_then(|v| v.as_array());
+    let sender_address = match inputs.and_then(|inputs| inputs.first()) {
+        Some(input) => {
+            // For Bitcoin Cash, we need to look at the previous transaction or scriptSig
+            // Since BCH uses UTXO model, sender info might be in different fields
+            match input.get("prevout")
+                .and_then(|prevout| prevout.get("scriptPubKey"))
+                .and_then(|script| script.get("addresses"))
+                .and_then(|addresses| addresses.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.as_str()) 
+            {
+                Some(addr) => {
+                    // Strip bitcoincash: prefix from sender address too
+                    let clean_addr = addr
+                        .strip_prefix("bitcoincash:")
+                        .unwrap_or(addr);
+                    println!("👤 Found sender address: {} (clean: {})", addr, clean_addr);
+                    clean_addr.to_string()
+                },
+                None => {
+                    // Fallback: use a placeholder or try to extract from scriptSig
+                    println!("⚠️ Could not determine sender address from inputs");
+                    "Unknown Sender".to_string()
+                }
+            }
+        },
+        None => {
+            eprintln!("❌ No inputs found in transaction");
+            return HttpResponse::BadRequest().body("No inputs found in the transaction");
+        }
+    };
+
+    // Extract outputs to find recipient and amount (Bitcoin Cash uses "vout" array)
+    let outputs = tx_json.get("vout").and_then(|v| v.as_array());
+    let mut total_bitcoincash = 0u64;
+    let mut found_recipient = false;
+
+    match outputs {
+        Some(outputs_array) => {
+            for output in outputs_array {
+                // Check if this output has the expected recipient address
+                if let Some(script_pub_key) = output.get("scriptPubKey") {
+                    if let Some(addresses) = script_pub_key.get("addresses").and_then(|v| v.as_array()) {
+                        for address in addresses {
+                            if let Some(addr_str) = address.as_str() {
+                                // Remove "bitcoincash:" prefix for comparison
+                                let clean_addr = addr_str
+                                    .strip_prefix("bitcoincash:")
+                                    .unwrap_or(addr_str);
+                                
+                                println!("🏠 Found output address: {} (clean: {})", addr_str, clean_addr);
+                                if clean_addr == EXPECTED_RECIPIENT {
+                                    found_recipient = true;
+                                    
+                                    // Bitcoin Cash value is in BCH format (e.g., 0.00844646)
+                                    if let Some(value) = output.get("value").and_then(|v| v.as_f64()) {
+                                        // Convert BCH to satoshi (1 BCH = 100,000,000 satoshi)
+                                        let satoshi = (value * 100_000_000.0) as u64;
+                                        println!("💰 Found {} BCH ({} satoshi) for recipient", 
+                                            value, satoshi);
+                                        total_bitcoincash = total_bitcoincash.saturating_add(satoshi);
+                                    } else {
+                                        eprintln!("❌ No value field found in output for recipient");
+                                        return HttpResponse::BadRequest().body("No value found for recipient address");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        None => {
+            eprintln!("❌ No outputs found in transaction");
+            return HttpResponse::BadRequest().body("No outputs found in the transaction");
+        }
+    }
+
+    if !found_recipient {
+        eprintln!("❌ Expected recipient address not found in transaction outputs");
+        return HttpResponse::BadRequest()
+            .body(format!("Transaction does not contain expected recipient address ({})", EXPECTED_RECIPIENT));
+    }
+
+    if total_bitcoincash == 0 {
+        eprintln!("❌ No bitcoin cash amount found for the expected recipient");
+        return HttpResponse::BadRequest()
+            .body("No amount found for the expected recipient address");
+    }
+
+    println!("✅ Transaction validation successful!");
+    println!("📊 Summary - Sender: {}, Recipient: {}, Amount: {} satoshi ({} BCH)", 
+        sender_address, EXPECTED_RECIPIENT, total_bitcoincash, total_bitcoincash as f64 / 100_000_000.0);
+
+    // 4) Clone fields BEFORE moving into blocking closure
+    let tx_hash = req.tx_hash.clone();
+    let proof_system = req.proof_system.clone();
+    let sender_address_clone = sender_address.clone();
+    let owner_address_plain = req.owner_address.clone();
+    let owner_address_for_closure = owner_address_plain.clone();
+    let amount = total_bitcoincash;
+
+    println!("🔐 Starting proof generation with system: {}", proof_system);
+
+    // 5) Prove (blocking)
+    let proof_result = task::spawn_blocking(move || {
+        println!("🏗️ Building prover client...");
+        let client = ProverClient::builder().network().build();
+        let (pk, vk) = client.setup(BITCOINCASH_TX_ELF);
+        println!("✅ Prover client setup complete");
+
+        // Build stdin
+        let mut stdin = SP1Stdin::new();
+
+        // txid as bytes (from hex)
+        let txid_decoded = hex::decode(&tx_hash)
+            .map_err(|e| anyhow!("Invalid tx hash: {}", e))?;
+        let txid_bytes: [u8; 32] = txid_decoded
+            .try_into()
+            .map_err(|e| anyhow!("Invalid tx hash length: {:?}", e))?;
+
+        println!("🔑 Prepared circuit input");
+
+        // Prepare circuit input - Use clean address without prefix
+        let input = BitcoinCashHoldingsInput {
+            txid: txid_bytes,
+            recipient_address: EXPECTED_RECIPIENT.to_string(),
+            sender_address: sender_address_clone,
+            owner_address: owner_address_for_closure,
+            tx_hash: tx_hash.clone(),
+            amount,
+        };
+
+        stdin.write(&input);
+
+        // Prove
+        let builder = client.prove(&pk, &stdin);
+        let builder = match proof_system.as_str() {
+            "groth16" => {
+                println!("🔒 Using Groth16 proof system");
+                builder.mode(SP1ProofMode::Groth16)
+            },
+            "plonk" => {
+                println!("🔒 Using PLONK proof system");
+                builder.mode(SP1ProofMode::Plonk)
+            },
+            _ => return Err(anyhow!("Invalid proof system: {}", proof_system)),
+        };
+
+        let builder = builder.strategy(FulfillmentStrategy::Hosted);
+
+        println!("⚡ Running proof generation...");
+        let proof = builder.run()?;
+        println!("✅ Proof generation complete!");
+        
+        Ok((proof, vk, tx_hash))
+    })
+    .await;
+
+    // 6) Handle proof result
+    let (proof, vk, tx_hash_from_proof) = match proof_result {
+        Ok(Ok((proof, vk, tx_hash))) => {
+            println!("🎉 Proof generation successful!");
+            (proof, vk, tx_hash)
+        },
+        Ok(Err(e)) => {
+            eprintln!("❌ Proof generation failed: {:?}", e);
+            return HttpResponse::InternalServerError()
+                .body(format!("Proof generation failed: {}", e));
+        }
+        Err(e) => {
+            eprintln!("💥 Proof generation task panicked: {:?}", e);
+            return HttpResponse::InternalServerError().body("Proof generation task failed");
+        }
+    };
+
+    let owner_address_from_proof = owner_address_plain;
+
+    // 7) Decode public values
+    println!("🔍 Decoding public values...");
+    let public_bytes = proof.public_values.as_slice();
+    let public_values = match PublicValuesBitcoinCashHoldings::abi_decode(public_bytes) {
+        Ok(val) => {
+            println!("✅ Successfully decoded public values");
+            val
+        },
+        Err(e) => {
+            eprintln!("❌ Decoding public values failed: {:?}", e);
+            return HttpResponse::InternalServerError().body("Failed to decode public values");
+        }
+    };
+
+    // 8) Build response
+    let response = BitcoinCashTxResponse {
+        total_bitcoin_cash: public_values.total_bitcoin_cash,
+        sender_address,
+        owner_address: owner_address_from_proof,
+        tx_hash: tx_hash_from_proof,
+        vkey: vk.bytes32(),
+        public_values: format!("0x{}", hex::encode(public_bytes)),
+        proof: format!("0x{}", hex::encode(proof.bytes())),
+    };
+
+    println!("🚀 Sending successful response");
+    HttpResponse::Ok().json(response)
+}
+
+
+
+
+
 
 
 
@@ -915,6 +1452,33 @@ async fn fetch_xrp_tx(tx_hash: &str) -> Result<Value, Box<dyn Error>> {
     println!("📥 Tatum response: {}", serde_json::to_string_pretty(&json)?);
     
     // Tatum returns transaction data directly, not wrapped in "result"
+    Ok(json)
+}
+
+async fn fetch_bch_tx(tx_hash: &str) -> Result<Value, Box<dyn Error>> {
+    // Tatum Bitcoin Cash API endpoint
+    let url = format!("https://api.tatum.io/v3/bcash/transaction/{}", tx_hash);
+    println!("🔍 Querying Tatum Bitcoin Cash API: {}", url);
+    
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("x-api-key", "t-68b034bfb63d86a61dd9f14e-1fd455540285454a99724f2b")
+        .header("accept", "application/json")
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await?;
+    
+    println!("📡 Response status: {}", resp.status());
+    
+    if !resp.status().is_success() {
+        return Err(format!("Failed to fetch transaction: {}", resp.status()).into());
+    }
+    
+    let json: Value = resp.json().await?;
+    println!("📥 Tatum Bitcoin Cash response: {}", serde_json::to_string_pretty(&json)?);
+    
+    // Return the FULL JSON data, not just the address
     Ok(json)
 }
 
@@ -973,6 +1537,34 @@ async fn xrp_balance_fetch(address: &str) -> Result<u64, Box<dyn Error>> {
     Ok(balance_drops)
 }
 
+async fn fetch_litecoin_tx(tx_hash: &str) -> Result<Value, Box<dyn Error>> {
+    // Tatum Litecoin API endpoint
+    let url = format!("https://api.tatum.io/v3/litecoin/transaction/{}", tx_hash);
+
+    println!("🔍 Querying Tatum Litecoin API: {}", url);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("x-api-key", "t-68b034bfb63d86a61dd9f14e-1fd455540285454a99724f2b") // Your API key
+        .header("accept", "application/json")
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await?;
+
+    println!("📡 Response status: {}", resp.status());
+
+    if !resp.status().is_success() {
+        return Err(format!("Failed to fetch transaction: {}", resp.status()).into());
+    }
+
+    let json: Value = resp.json().await?;
+    println!("📥 Tatum Litecoin response: {}", serde_json::to_string_pretty(&json)?);
+
+    Ok(json)
+}
+
+
 
 
 
@@ -990,6 +1582,8 @@ async fn main() -> std::io::Result<()> {
             .service(prove_xrp_transaction)
             .service(prove_xrp_balance)
             .service(prove_cardano_transaction)
+            .service(prove_litecoin_transaction)
+            .service(prove_bitcoincash_transaction)
     })
     .workers(1)
     .bind(("0.0.0.0", 4000))?

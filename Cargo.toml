@@ -5,7 +5,9 @@ members = [
     "doge_tx",
     "Xrp_tx",
     "Xrp_balance",
-    "Cardano_tx"
+    "Cardano_tx",
+    "LiteCoin_tx",
+    "BitcoinCash_tx"
     ]
 resolver = "2"
 

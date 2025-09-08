@@ -3,7 +3,33 @@
 version = 4
 
 [[package]]
+name = "BitcoinCash_tx-program"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "bs58",
+ "fibonacci-lib",
+ "hex",
+ "sha2",
+ "sp1-zkvm",
+]
+
+[[package]]
 name = "Cardano_tx-program"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "bs58",
+ "fibonacci-lib",
+ "hex",
+ "sha2",
+ "sp1-zkvm",
+]
+
+[[package]]
+name = "LiteCoin_tx-program"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",

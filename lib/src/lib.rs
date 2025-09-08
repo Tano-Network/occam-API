@@ -33,6 +33,21 @@ sol! {
         bytes32 tx_hash; // SHA256 of transaction hash
     }
 
+    struct PublicValuesLiteCoinHoldings {
+        uint64 total_litecoin; // Litoshis
+       bytes32 sender_address_hash; // SHA256 of sender address
+        address owner_address; // SHA256 of owner address
+       bytes32 tx_hash; // SHA256 of transaction hash
+    }
+
+    struct PublicValuesBitcoinCashHoldings {
+        uint64 total_bitcoin_cash; // Satoshis
+       bytes32 sender_address_hash; // SHA256 of sender address
+        address owner_address; // SHA256 of owner address
+       bytes32 tx_hash; // SHA256 of transaction hash
+    }
+
+  
 
 
 
@@ -91,6 +106,29 @@ pub struct CardanoTxInput {
     pub owner_address: String,
     pub tx_hash: String,
     pub amount: u64, // Lovelace
+}
+
+
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct LiteCoinHoldingsInput {
+    pub txid: [u8; 32],
+    pub recipient_address: String,
+    pub sender_address: String,
+    pub owner_address: String,
+    pub tx_hash: String,
+    pub amount: u64, // Litoshis
+}
+
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BitcoinCashHoldingsInput {
+    pub txid: [u8; 32],
+    pub recipient_address: String,
+    pub sender_address: String,
+    pub owner_address: String,
+    pub tx_hash: String,
+    pub amount: u64, // Satoshis
 }
 
 #[derive(Serialize, Deserialize, Clone)]
