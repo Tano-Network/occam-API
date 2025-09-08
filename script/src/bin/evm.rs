@@ -14,7 +14,9 @@ use sp1_sdk::network::FulfillmentStrategy;
 use alloy_sol_types::SolType; // ✅ needed for abi_encode / abi_decode
 use fibonacci_lib::XrpTxInput;
  use serde_json::Value;
- 
+use bitcoin::{Address, Network, PublicKey as BitcoinPublicKey};
+use bitcoin::secp256k1::{Secp256k1, PublicKey as SecpPublicKey};
+use cashaddr::convert::from_legacy;  // ✅ Fixed import
 
 
 
@@ -1150,7 +1152,6 @@ async fn prove_litecoin_transaction(req: web::Json<LiteCoinTxRequest>) -> impl R
     HttpResponse::Ok().json(response)
 }
 
-
 #[post("/prove-bitcoincash-transaction")]
 async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> impl Responder {
     println!("🔍 Received Bitcoin Cash transaction proof request: {:?}", req);
@@ -1168,12 +1169,6 @@ async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> 
         }
     };
 
-    // ADD DEBUG LOG FOR FULL RESPONSE
-    println!("📋 Full Tatum API Response: {}", 
-        serde_json::to_string_pretty(&tx_details)
-            .unwrap_or_else(|_| "Failed to serialize response".to_string())
-    );
-
     // Check for API errors first
     if let Some(error) = tx_details.get("error") {
         eprintln!("🚫 Tatum API returned error: {}", error);
@@ -1181,44 +1176,43 @@ async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> 
             .body(format!("Tatum API error: {}", error));
     }
 
-    // List available top-level fields
-    if let Some(obj) = tx_details.as_object() {
-        println!("📝 Available top-level fields: {:?}", obj.keys().collect::<Vec<_>>());
-    }
-
-    // 2) Extract transaction data from Tatum response
     let tx_json = &tx_details;
 
-    // 3) Verify recipient address and extract amount
+    // Expected recipient address
     const EXPECTED_RECIPIENT: &str = "qqv2smfg2yd2u3e3dt0ype63cw06lqcl3c0jlhw8v3";
     println!("🎯 Expected recipient: {}", EXPECTED_RECIPIENT);
 
-    // Extract sender address from inputs (Bitcoin Cash uses "vin" array)
+    // ENHANCED SENDER ADDRESS EXTRACTION WITH BCH FORMAT
     let inputs = tx_json.get("vin").and_then(|v| v.as_array());
     let sender_address = match inputs.and_then(|inputs| inputs.first()) {
         Some(input) => {
-            // For Bitcoin Cash, we need to look at the previous transaction or scriptSig
-            // Since BCH uses UTXO model, sender info might be in different fields
-            match input.get("prevout")
+            // Method 1: Try prevout.scriptPubKey.addresses (standard UTXO)
+            if let Some(addr) = input.get("prevout")
                 .and_then(|prevout| prevout.get("scriptPubKey"))
                 .and_then(|script| script.get("addresses"))
                 .and_then(|addresses| addresses.as_array())
                 .and_then(|arr| arr.first())
                 .and_then(|v| v.as_str()) 
             {
-                Some(addr) => {
-                    // Strip bitcoincash: prefix from sender address too
-                    let clean_addr = addr
-                        .strip_prefix("bitcoincash:")
-                        .unwrap_or(addr);
-                    println!("👤 Found sender address: {} (clean: {})", addr, clean_addr);
-                    clean_addr.to_string()
-                },
-                None => {
-                    // Fallback: use a placeholder or try to extract from scriptSig
-                    println!("⚠️ Could not determine sender address from inputs");
+                println!("👤 Found sender address from prevout: {}", addr);
+                addr.to_string() // Already in bitcoincash: format
+            }
+            // Method 2: Extract from scriptSig.asm (MAIN METHOD FOR RAW TRANSACTIONS)
+            else if let Some(asm) = input.get("scriptSig")
+                .and_then(|sig| sig.get("asm"))
+                .and_then(|a| a.as_str())
+            {
+                if let Some(addr) = extract_address_from_scriptsig_asm(asm) {
+                    println!("👤 Successfully derived sender address from scriptSig: {}", addr);
+                    addr
+                } else {
+                    println!("⚠️ Could not derive address from scriptSig ASM, using fallback");
                     "Unknown Sender".to_string()
                 }
+            }
+            else {
+                println!("⚠️ Could not determine sender address from any method");
+                "Unknown Sender".to_string()
             }
         },
         None => {
@@ -1227,7 +1221,7 @@ async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> 
         }
     };
 
-    // Extract outputs to find recipient and amount (Bitcoin Cash uses "vout" array)
+    // Extract outputs to find recipient and amount
     let outputs = tx_json.get("vout").and_then(|v| v.as_array());
     let mut total_bitcoincash = 0u64;
     let mut found_recipient = false;
@@ -1235,30 +1229,22 @@ async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> 
     match outputs {
         Some(outputs_array) => {
             for output in outputs_array {
-                // Check if this output has the expected recipient address
                 if let Some(script_pub_key) = output.get("scriptPubKey") {
                     if let Some(addresses) = script_pub_key.get("addresses").and_then(|v| v.as_array()) {
                         for address in addresses {
                             if let Some(addr_str) = address.as_str() {
-                                // Remove "bitcoincash:" prefix for comparison
                                 let clean_addr = addr_str
                                     .strip_prefix("bitcoincash:")
                                     .unwrap_or(addr_str);
                                 
-                                println!("🏠 Found output address: {} (clean: {})", addr_str, clean_addr);
                                 if clean_addr == EXPECTED_RECIPIENT {
                                     found_recipient = true;
                                     
-                                    // Bitcoin Cash value is in BCH format (e.g., 0.00844646)
                                     if let Some(value) = output.get("value").and_then(|v| v.as_f64()) {
-                                        // Convert BCH to satoshi (1 BCH = 100,000,000 satoshi)
                                         let satoshi = (value * 100_000_000.0) as u64;
                                         println!("💰 Found {} BCH ({} satoshi) for recipient", 
                                             value, satoshi);
                                         total_bitcoincash = total_bitcoincash.saturating_add(satoshi);
-                                    } else {
-                                        eprintln!("❌ No value field found in output for recipient");
-                                        return HttpResponse::BadRequest().body("No value found for recipient address");
                                     }
                                 }
                             }
@@ -1274,13 +1260,11 @@ async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> 
     }
 
     if !found_recipient {
-        eprintln!("❌ Expected recipient address not found in transaction outputs");
         return HttpResponse::BadRequest()
-            .body(format!("Transaction does not contain expected recipient address ({})", EXPECTED_RECIPIENT));
+            .body(format!("Transaction does not contain expected recipient address"));
     }
 
     if total_bitcoincash == 0 {
-        eprintln!("❌ No bitcoin cash amount found for the expected recipient");
         return HttpResponse::BadRequest()
             .body("No amount found for the expected recipient address");
     }
@@ -1289,7 +1273,7 @@ async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> 
     println!("📊 Summary - Sender: {}, Recipient: {}, Amount: {} satoshi ({} BCH)", 
         sender_address, EXPECTED_RECIPIENT, total_bitcoincash, total_bitcoincash as f64 / 100_000_000.0);
 
-    // 4) Clone fields BEFORE moving into blocking closure
+    // Clone fields for proof generation
     let tx_hash = req.tx_hash.clone();
     let proof_system = req.proof_system.clone();
     let sender_address_clone = sender_address.clone();
@@ -1297,28 +1281,19 @@ async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> 
     let owner_address_for_closure = owner_address_plain.clone();
     let amount = total_bitcoincash;
 
-    println!("🔐 Starting proof generation with system: {}", proof_system);
-
-    // 5) Prove (blocking)
+    // Generate proof in blocking task
     let proof_result = task::spawn_blocking(move || {
-        println!("🏗️ Building prover client...");
         let client = ProverClient::builder().network().build();
         let (pk, vk) = client.setup(BITCOINCASH_TX_ELF);
-        println!("✅ Prover client setup complete");
 
-        // Build stdin
         let mut stdin = SP1Stdin::new();
 
-        // txid as bytes (from hex)
         let txid_decoded = hex::decode(&tx_hash)
             .map_err(|e| anyhow!("Invalid tx hash: {}", e))?;
         let txid_bytes: [u8; 32] = txid_decoded
             .try_into()
             .map_err(|e| anyhow!("Invalid tx hash length: {:?}", e))?;
 
-        println!("🔑 Prepared circuit input");
-
-        // Prepare circuit input - Use clean address without prefix
         let input = BitcoinCashHoldingsInput {
             txid: txid_bytes,
             recipient_address: EXPECTED_RECIPIENT.to_string(),
@@ -1330,79 +1305,54 @@ async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> 
 
         stdin.write(&input);
 
-        // Prove
         let builder = client.prove(&pk, &stdin);
         let builder = match proof_system.as_str() {
-            "groth16" => {
-                println!("🔒 Using Groth16 proof system");
-                builder.mode(SP1ProofMode::Groth16)
-            },
-            "plonk" => {
-                println!("🔒 Using PLONK proof system");
-                builder.mode(SP1ProofMode::Plonk)
-            },
+            "groth16" => builder.mode(SP1ProofMode::Groth16),
+            "plonk" => builder.mode(SP1ProofMode::Plonk),
             _ => return Err(anyhow!("Invalid proof system: {}", proof_system)),
         };
 
         let builder = builder.strategy(FulfillmentStrategy::Hosted);
-
-        println!("⚡ Running proof generation...");
         let proof = builder.run()?;
-        println!("✅ Proof generation complete!");
         
         Ok((proof, vk, tx_hash))
     })
     .await;
 
-    // 6) Handle proof result
+    // Handle proof result
     let (proof, vk, tx_hash_from_proof) = match proof_result {
-        Ok(Ok((proof, vk, tx_hash))) => {
-            println!("🎉 Proof generation successful!");
-            (proof, vk, tx_hash)
-        },
+        Ok(Ok((proof, vk, tx_hash))) => (proof, vk, tx_hash),
         Ok(Err(e)) => {
-            eprintln!("❌ Proof generation failed: {:?}", e);
             return HttpResponse::InternalServerError()
                 .body(format!("Proof generation failed: {}", e));
         }
         Err(e) => {
-            eprintln!("💥 Proof generation task panicked: {:?}", e);
             return HttpResponse::InternalServerError().body("Proof generation task failed");
         }
     };
 
-    let owner_address_from_proof = owner_address_plain;
-
-    // 7) Decode public values
-    println!("🔍 Decoding public values...");
+    // Decode public values
     let public_bytes = proof.public_values.as_slice();
     let public_values = match PublicValuesBitcoinCashHoldings::abi_decode(public_bytes) {
-        Ok(val) => {
-            println!("✅ Successfully decoded public values");
-            val
-        },
+        Ok(val) => val,
         Err(e) => {
-            eprintln!("❌ Decoding public values failed: {:?}", e);
             return HttpResponse::InternalServerError().body("Failed to decode public values");
         }
     };
 
-    // 8) Build response
+    // Build response
     let response = BitcoinCashTxResponse {
         total_amount: public_values.total_bitcoin_cash,
         sender_address,
-        owner_address: owner_address_from_proof,
+        owner_address: owner_address_plain,
         tx_hash: tx_hash_from_proof,
         vkey: vk.bytes32(),
         public_values: format!("0x{}", hex::encode(public_bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
     };
 
-    println!("🚀 Sending successful response");
     HttpResponse::Ok().json(response)
 }
-
-
 
 
 
@@ -1563,6 +1513,61 @@ async fn fetch_litecoin_tx(tx_hash: &str) -> Result<Value, Box<dyn Error>> {
 
     Ok(json)
 }
+
+
+// Function to extract Bitcoin Cash address from scriptSig asm
+// Function to extract Bitcoin Cash address from scriptSig asm
+fn extract_address_from_scriptsig_asm(asm: &str) -> Option<String> {
+    println!("🔍 Analyzing scriptSig ASM: {}", asm);
+    
+    let parts: Vec<&str> = asm.split(' ').collect();
+    
+    for part in parts.iter().rev() {
+        let clean_pubkey = part.split('[').next().unwrap_or(part);
+        
+        if clean_pubkey.len() < 60 || clean_pubkey.starts_with("30") {
+            continue;
+        }
+        
+        println!("🔑 Trying to decode pubkey: {}", clean_pubkey);
+        
+        if let Ok(pubkey_bytes) = hex::decode(clean_pubkey) {
+            if pubkey_bytes.len() == 33 || pubkey_bytes.len() == 65 {
+                if let Ok(secp_pubkey) = SecpPublicKey::from_slice(&pubkey_bytes) {
+                    let btc_pubkey = BitcoinPublicKey::new(secp_pubkey);
+                    let address = Address::p2pkh(&btc_pubkey, Network::Bitcoin);
+                    let legacy_addr = address.to_string();
+                    
+                    println!("✅ Generated legacy address: {}", legacy_addr);
+                    
+                    if let Some(bch_addr) = convert_to_cashaddr(&legacy_addr) {
+                        println!("✅ Converted to BCH address: {}", bch_addr);
+                        return Some(bch_addr);
+                    }
+                }
+            }
+        }
+    }
+    
+    println!("❌ Could not extract address from scriptSig ASM");
+    None
+}
+
+// Convert legacy Bitcoin address to Bitcoin Cash format
+fn convert_to_cashaddr(legacy_addr: &str) -> Option<String> {
+    match from_legacy(legacy_addr, "bitcoincash") {
+        Ok(bch_addr) => {
+            // Remove the "bitcoincash:" prefix if present
+            let clean_addr = bch_addr.strip_prefix("bitcoincash:").unwrap_or(&bch_addr);
+            Some(clean_addr.to_string())
+        },
+        Err(e) => {
+            println!("❌ Failed to convert to cashaddr: {:?}", e);
+            None
+        }
+    }
+}
+
 
 
 
