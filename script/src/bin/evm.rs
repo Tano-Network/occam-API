@@ -84,7 +84,7 @@ pub struct BitcoinCashTxRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiteCoinTxResponse {
-    total_litecoin: u64,
+    total_amount: u64,
     sender_address: String,
     owner_address: String, 
     tx_hash: String,
@@ -96,7 +96,7 @@ pub struct LiteCoinTxResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BitcoinCashTxResponse {
-    total_bitcoin_cash: u64,
+    total_amount: u64,
     sender_address: String,
     owner_address: String, 
     tx_hash: String,
@@ -109,7 +109,7 @@ pub struct BitcoinCashTxResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DogeTxResponse {
-    total_doge: u64,
+    total_amount: u64,
     sender_address: String,
     owner_address: String, 
     tx_hash: String,
@@ -131,7 +131,7 @@ pub struct XrpBalanceResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XrpTxResponse {
-    total_xrp: u64,
+    total_amount: u64,
     sender_address: String,
     owner_address: String, 
     tx_hash: String,
@@ -143,7 +143,7 @@ pub struct XrpTxResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardanoTxResponse {
-    total_lovelace: u64,
+    total_amount: u64,
     sender_address: String,
     owner_address: String, 
     tx_hash: String,
@@ -311,7 +311,7 @@ async fn prove_doge_transaction(req: web::Json<DogeTxRequest>) -> impl Responder
 
     // 7) Build response
     let response = DogeTxResponse {
-        total_doge: public_values.total_doge,
+        total_amount: public_values.total_doge,
         sender_address,
         owner_address: owner_address_from_proof,
         tx_hash: tx_hash_from_proof,
@@ -543,7 +543,7 @@ async fn prove_xrp_transaction(req: web::Json<XrpTxRequest>) -> impl Responder {
 
     // 8) Build response
     let response = XrpTxResponse {
-        total_xrp: public_values.total_xrp,
+        total_amount: public_values.total_xrp,
         sender_address,
         owner_address: owner_address_from_proof,
         tx_hash: tx_hash_from_proof,
@@ -775,7 +775,7 @@ async fn prove_cardano_transaction(req: web::Json<CardanoTxRequest>) -> impl Res
 
     // 8) Build response
     let response = CardanoTxResponse {
-        total_lovelace: public_values.total_lovelace,
+        total_amount: public_values.total_lovelace,
         sender_address,
         owner_address: owner_address_from_proof,
         tx_hash: tx_hash_from_proof,
@@ -1137,7 +1137,7 @@ async fn prove_litecoin_transaction(req: web::Json<LiteCoinTxRequest>) -> impl R
 
     // 8) Build response
     let response = LiteCoinTxResponse {
-        total_litecoin: public_values.total_litecoin,
+        total_amount: public_values.total_litecoin,
         sender_address,
         owner_address: owner_address_from_proof,
         tx_hash: tx_hash_from_proof,
@@ -1389,7 +1389,7 @@ async fn prove_bitcoincash_transaction(req: web::Json<BitcoinCashTxRequest>) -> 
 
     // 8) Build response
     let response = BitcoinCashTxResponse {
-        total_bitcoin_cash: public_values.total_bitcoin_cash,
+        total_amount: public_values.total_bitcoin_cash,
         sender_address,
         owner_address: owner_address_from_proof,
         tx_hash: tx_hash_from_proof,
